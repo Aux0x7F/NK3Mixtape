@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>No Kings Day 3 Mixtape</title>
+  <link rel="icon" type="image/x-icon" href="./assets/nk3-favicon.ico">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <meta name="theme-color" content="#e21f19">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <section id="authSplash" class="splash">
+    <div class="splash-card">
+      <div class="brand splash-brand">
+        <img class="brand-logo" src="./assets/nk3-logo-stacked.png" alt="">
+        <h1>No Kings Day 3 Mixtape</h1>
+      </div>
+      <div id="splashStatus" class="status">sign in to open the playlist</div>
+      <form id="signinForm" class="signin" autocomplete="off">
+        <input id="nameInput" name="name" placeholder="alias" maxlength="32" required>
+        <input id="passphraseInput" name="passphrase" type="password" placeholder="password" required>
+        <button type="submit">enter</button>
+      </form>
+      <button id="splashInstallBtn" class="ghost hidden" type="button">install app</button>
+    </div>
+  </section>
+
+  <main id="appMain" class="app hidden">
+    <header class="header">
+      <div class="brand">
+        <img class="brand-logo" src="./assets/nk3-logo-stacked.png" alt="">
+        <h1>No Kings Day 3 Mixtape</h1>
+      </div>
+      <div id="identityContainer" class="identity"></div>
+    </header>
+
+    <section class="actions">
+      <button id="openAddSongBtn" class="add-song hidden" type="button">Add song</button>
+    </section>
+
+    <section id="list" class="list"></section>
+  </main>
+
+  <template id="identityTemplateLoggedIn">
+    <div class="signed-in">
+      <button id="menuBtn" type="button" aria-label="Menu">☰</button>
+    </div>
+  </template>
+
+  <div id="menuModal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card">
+      <button class="modal-close" type="button" data-close-modal="menuModal">x</button>
+      <div id="menuIdentity" class="menu-identity"></div>
+      <button id="openProfileBtn" type="button">profile</button>
+      <button id="openAdminBtn" class="hidden" type="button">admin</button>
+      <button id="menuInstallBtn" class="hidden" type="button">install app</button>
+      <button id="menuLogoutBtn" type="button">logout</button>
+    </div>
+  </div>
+
+  <div id="adminModal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card">
+      <button class="modal-close" type="button" data-close-modal="adminModal">x</button>
+      <div class="admin-modal-body">
+        <section class="admin-section">
+          <h2>Setup</h2>
+          <p class="admin-help">Claim first admin and export keys.</p>
+          <section id="wizardTools" class="wizard hidden">
+            <span id="wizardText"></span>
+            <button id="claimAdminBtn" type="button">claim admin</button>
+            <button id="downloadKeysBtn" type="button">download keys</button>
+          </section>
+        </section>
+        <section class="admin-section">
+          <h2>View</h2>
+          <p class="admin-help">Toggle deleted entries in the list.</p>
+          <label class="toggle">
+            <input id="showRevokedToggle" type="checkbox">
+            <span>show deleted</span>
+          </label>
+        </section>
+        <section class="admin-section">
+          <h2>Admins</h2>
+          <p class="admin-help">Paste a pubkey to grant or remove admin access.</p>
+          <input id="adminPubkeyInput" type="text" placeholder="target pubkey" maxlength="64" spellcheck="false">
+          <div class="admin-actions">
+            <button id="grantAdminBtn" type="button">+admin</button>
+            <button id="revokeAdminBtn" type="button">remove admin</button>
+          </div>
+        </section>
+        <section class="admin-section">
+          <h2>Backup</h2>
+          <p class="admin-help">Restore from paste URL or recovery file.</p>
+          <div id="backupMetaLine" class="status"></div>
+          <section id="recoveryTools" class="recovery">
+            <input id="backupUrlInput" type="url" placeholder="paste snapshot url">
+            <button id="restoreBackupBtn" type="button">restore</button>
+            <label class="file-pick">
+              <span>file</span>
+              <input id="backupFileInput" type="file" accept=".json,.txt,application/json,text/plain">
+            </label>
+          </section>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <div id="profileModal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card">
+      <button class="modal-close" type="button" data-close-modal="profileModal">x</button>
+      <form id="profileForm" class="profile-form" autocomplete="off">
+        <input id="profileNameInput" maxlength="32" placeholder="alias" required>
+        <input id="profileSocialInput" maxlength="220" placeholder="social link">
+        <textarea id="profileBioInput" maxlength="320" placeholder="bio"></textarea>
+        <button type="submit">save</button>
+      </form>
+    </div>
+  </div>
+
+  <div id="userModal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card">
+      <button class="modal-close" type="button" data-close-modal="userModal">x</button>
+      <div id="userModalName" class="user-modal-name"></div>
+      <a id="userModalSocial" class="user-modal-social hidden" href="#" target="_blank" rel="noopener noreferrer"></a>
+      <div id="userModalBio" class="user-modal-bio"></div>
+      <div id="userModalEntryMeta" class="user-modal-entry hidden"></div>
+      <div id="userModalAdminBlock" class="user-modal-admin hidden">
+        <div id="userModalBanState" class="user-modal-ban-state"></div>
+        <div class="user-modal-ban-actions">
+          <button id="userModalBanBtn" type="button">ban</button>
+          <input id="userModalTempBanMinutesInput" type="number" placeholder="mins" min="1" max="525600" step="1">
+          <button id="userModalTempBanBtn" type="button">temp</button>
+          <button id="userModalUnbanBtn" type="button">unban</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="addSongModal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card">
+      <button class="modal-close" type="button" data-close-modal="addSongModal">x</button>
+      <form id="entryForm" class="entry-form" autocomplete="off">
+        <input id="titleInput" name="title" placeholder="title" maxlength="120" required>
+        <input id="artistInput" name="artist" placeholder="artist" maxlength="120" required>
+        <input id="youtubeInput" name="youtube" placeholder="youtube url (optional)" maxlength="300">
+        <div class="entry-actions">
+          <button type="submit">submit</button>
+          <button id="cancelAddSongBtn" type="button" class="ghost">cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="deleteConfirmModal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card">
+      <button class="modal-close" type="button" data-close-modal="deleteConfirmModal">x</button>
+      <div id="deleteConfirmText" class="confirm-text"></div>
+      <div class="confirm-actions">
+        <button id="confirmDeleteBtn" type="button" class="danger">delete</button>
+        <button id="cancelDeleteBtn" type="button" class="ghost">cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="ytPlayerHost" class="yt-host" aria-hidden="true"></div>
+
+  <script src="./vendor/event-tools.bundle.js"></script>
+  <script src="./vendor/event-tools-shim.js"></script>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

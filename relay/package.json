@@ -1,0 +1,14 @@
+{
+  "name": "nk3-pinning-relay",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Minimal self-hosted Nostr-compatible pinning relay for NK3",
+  "main": "pinning-relay.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node pinning-relay.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

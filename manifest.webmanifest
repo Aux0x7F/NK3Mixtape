@@ -1,0 +1,24 @@
+{
+  "name": "No Kings Day 3 Mixtape",
+  "short_name": "NK3 Mixtape",
+  "description": "Signed, shared playlist voting board for No Kings Day 3.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f8efd6",
+  "theme_color": "#e21f19",
+  "icons": [
+    {
+      "src": "./assets/nk3-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./assets/nk3-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
