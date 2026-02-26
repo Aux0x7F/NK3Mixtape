@@ -1185,8 +1185,12 @@ function renderRow(r) {
 
   const main = document.createElement("div");
   main.className = "item-main";
-  const line = document.createElement("div");
-  line.className = "line";
+  const titleLine = document.createElement("div");
+  titleLine.className = "title-line";
+  const artistLine = document.createElement("div");
+  artistLine.className = "artist-line";
+  const metaLine = document.createElement("div");
+  metaLine.className = "meta-line";
 
   const title = document.createElement("span");
   title.className = "title";
@@ -1211,9 +1215,6 @@ function renderRow(r) {
   } else {
     author.disabled = true;
   }
-  const time = document.createElement("span");
-  time.className = "time";
-  time.textContent = fmtDate(r.created_at);
 
   if (r.youtube_id) {
     const play = document.createElement("button");
@@ -1221,12 +1222,15 @@ function renderRow(r) {
     const active = state.youtube.currentEntryId === r.entry_id && state.youtube.isPlaying;
     play.className = active ? "play-btn active" : "play-btn";
     play.title = active ? "pause" : "play";
-    play.textContent = active ? "||" : "\u25b6";
+    play.setAttribute("aria-label", active ? "pause" : "play");
+    play.appendChild(createPlayPauseIcon(active));
     play.addEventListener("click", () => void onPlayToggle(r.entry_id, r.youtube_id));
-    line.appendChild(play);
+    titleLine.appendChild(play);
   }
 
-  line.append(title, artist, author, time);
+  titleLine.prepend(title);
+  artistLine.appendChild(artist);
+  metaLine.append(author);
   if (isAdminMe() && !r.revoked) {
     const del = document.createElement("button");
     del.type = "button";
@@ -1238,13 +1242,13 @@ function renderRow(r) {
       event.stopPropagation();
       openDeleteConfirm(r);
     });
-    line.appendChild(del);
+    titleLine.appendChild(del);
   }
 
   const ups = document.createElement("div");
   ups.className = "upvoters";
   ups.textContent = r.upvoters.join(" · ");
-  main.append(line, ups);
+  main.append(titleLine, artistLine, metaLine, ups);
 
   const vs = document.createElement("div");
   vs.className = "vote-stack";
@@ -1254,14 +1258,16 @@ function renderRow(r) {
   const up = document.createElement("button");
   up.type = "button";
   up.className = r.myVote > 0 ? "vote up active" : "vote up";
-  up.textContent = "\u25b2";
+  up.setAttribute("aria-label", "upvote");
+  up.appendChild(createVoteIcon("up"));
   up.disabled = !state.identity || Boolean(activeBanForPubkey(state.identity?.pubkey || ""));
   up.addEventListener("click", () => void castVote(r.entry_id, 1));
 
   const down = document.createElement("button");
   down.type = "button";
   down.className = r.myVote < 0 ? "vote down active" : "vote down";
-  down.textContent = "\u25bc";
+  down.setAttribute("aria-label", "downvote");
+  down.appendChild(createVoteIcon("down"));
   down.disabled = !state.identity || Boolean(activeBanForPubkey(state.identity?.pubkey || ""));
   down.addEventListener("click", () => void castVote(r.entry_id, -1));
 
@@ -1283,6 +1289,40 @@ function createTrashIcon() {
   svg.setAttribute("focusable", "false");
   const path = document.createElementNS(ns, "path");
   path.setAttribute("d", "M9 3h6l1 2h4v2H4V5h4l1-2zm-2 6h2v9H7V9zm4 0h2v9h-2V9zm4 0h2v9h-2V9zM6 7h12l-1 14H7L6 7z");
+  svg.appendChild(path);
+  return svg;
+}
+
+function createPlayPauseIcon(isPlaying) {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+  const path = document.createElementNS(ns, "path");
+  path.setAttribute(
+    "d",
+    isPlaying
+      ? "M7 5h4v14H7zM13 5h4v14h-4z"
+      : "M8 5v14l11-7z",
+  );
+  svg.appendChild(path);
+  return svg;
+}
+
+function createVoteIcon(direction) {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 20 20");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+  const path = document.createElementNS(ns, "path");
+  path.setAttribute(
+    "d",
+    direction === "down"
+      ? "M10 16L4.5 8h11L10 16z"
+      : "M10 4l5.5 8h-11L10 4z",
+  );
   svg.appendChild(path);
   return svg;
 }
