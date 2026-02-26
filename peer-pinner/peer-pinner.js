@@ -7,7 +7,7 @@ const WebSocket = require("ws");
 const HOST = process.env.HOST || "0.0.0.0";
 const PORT = Number(process.env.PORT || 4848);
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
-const EVENTS_FILE = path.join(DATA_DIR, "events.ndjson");
+const EVENTS_FILE = process.env.EVENTS_FILE || path.join(DATA_DIR, "events.ndjson");
 const IDENTITY_FILE = process.env.IDENTITY_FILE || path.join(DATA_DIR, "peer-pinner-identity.json");
 const INFO_NAME = process.env.PINNER_NAME || "NK3 Peer Pinner";
 const INFO_DESC = process.env.PINNER_DESCRIPTION || "Mirrors + pins NK3 signed events for downstream Nostr consumers";
@@ -35,6 +35,7 @@ if (!Number.isFinite(MAX_REQ_EVENTS) || MAX_REQ_EVENTS <= 0) {
 }
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
+fs.mkdirSync(path.dirname(EVENTS_FILE), { recursive: true });
 if (!fs.existsSync(EVENTS_FILE)) fs.writeFileSync(EVENTS_FILE, "", { encoding: "utf8" });
 const pinnerIdentity = loadOrCreatePeerPinnerIdentity(IDENTITY_FILE, PINNER_ALIAS_OVERRIDE);
 const PINNER_ALIAS = PINNER_ALIAS_OVERRIDE || pinnerIdentity.alias;
@@ -43,7 +44,9 @@ const INFO_PUBKEY = PINNER_PUBKEY_OVERRIDE || pinnerIdentity.pubkey;
 const eventsById = new Map();
 const ordered = [];
 let orderedDirty = false;
-const writeStream = fs.createWriteStream(EVENTS_FILE, { flags: "a" });
+let persistWriteOk = 0;
+let persistWriteFail = 0;
+let lastPersistError = "";
 
 const upstreams = new Map();
 const model = {
@@ -70,6 +73,7 @@ const server = http.createServer((req, res) => {
       upstream.push({ relay, connected: Boolean(client.connected) });
     }
     res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+    const eventsBytes = fileSizeSafe(EVENTS_FILE);
     res.end(JSON.stringify({
       ok: true,
       events: eventsById.size,
@@ -77,6 +81,15 @@ const server = http.createServer((req, res) => {
       relay_identity: {
         alias: PINNER_ALIAS,
         pubkey: INFO_PUBKEY,
+      },
+      storage: {
+        data_dir: DATA_DIR,
+        events_file: EVENTS_FILE,
+        identity_file: IDENTITY_FILE,
+        events_file_bytes: eventsBytes,
+        writes_ok: persistWriteOk,
+        writes_failed: persistWriteFail,
+        last_write_error: lastPersistError,
       },
       logical: resolveLogicalState(),
     }));
@@ -140,7 +153,10 @@ wss.on("connection", (ws) => {
         wsSend(ws, ["OK", ev.id, true, "duplicate: already stored"]);
         return;
       }
-      storeEvent(ev);
+      if (!storeEvent(ev)) {
+        wsSend(ws, ["OK", ev.id, false, "persist failed"]);
+        return;
+      }
       wsSend(ws, ["OK", ev.id, true, "stored"]);
       publishToUpstreams(ev, "");
       broadcastEvent(ev);
@@ -193,6 +209,7 @@ startUpstreamMirrors();
 
 server.listen(PORT, HOST, () => {
   console.log(`nk3 peer pinner listening ws://${HOST}:${PORT}`);
+  console.log(`events file ${EVENTS_FILE}`);
   console.log(`pinner identity @${PINNER_ALIAS} ${shortKey(INFO_PUBKEY)} (${IDENTITY_FILE})`);
   if (UPSTREAM_RELAYS.length > 0) {
     console.log(`upstream mirrors: ${UPSTREAM_RELAYS.join(", ")}`);
@@ -200,11 +217,6 @@ server.listen(PORT, HOST, () => {
 });
 
 const shutdown = () => {
-  try {
-    writeStream.end();
-  } catch {
-    // ignore
-  }
   for (const client of upstreams.values()) {
     clearTimeout(client.retryTimer);
     try {
@@ -261,7 +273,7 @@ function connectUpstream(relay) {
       const ev = msg[2];
       if (!isEventShape(ev)) return;
       if (eventsById.has(ev.id)) return;
-      storeEvent(ev);
+      if (!storeEvent(ev)) return;
       broadcastEvent(ev);
       maybeShareSnapshotForRequest(ev, relay);
     }
@@ -336,15 +348,28 @@ function compareEventAsc(a, b) {
 
 function storeEvent(ev) {
   if (eventsById.has(ev.id)) return false;
+  if (!persistEvent(ev)) return false;
   eventsById.set(ev.id, ev);
   if (ordered.length > 0 && compareEventAsc(ordered[ordered.length - 1], ev) > 0) {
     orderedDirty = true;
   }
   ordered.push(ev);
-  writeStream.write(`${JSON.stringify(ev)}\n`);
   ingestDerivedEvent(ev);
   recomputeDerived();
   return true;
+}
+
+function persistEvent(ev) {
+  try {
+    fs.appendFileSync(EVENTS_FILE, `${JSON.stringify(ev)}\n`, { encoding: "utf8" });
+    persistWriteOk += 1;
+    return true;
+  } catch (err) {
+    persistWriteFail += 1;
+    lastPersistError = String(err?.message || err || "unknown error");
+    console.error(`persist failed (${EVENTS_FILE}): ${lastPersistError}`);
+    return false;
+  }
 }
 
 function publishToUpstreams(ev, skipRelay) {
@@ -872,4 +897,12 @@ function parseKinds(raw) {
     out.push(v);
   }
   return out.length > 0 ? out : [34123, 34124, 34125, 34126, 34127, 34128, 34129, 34130, 34131, 34132];
+}
+
+function fileSizeSafe(file) {
+  try {
+    return fs.statSync(file).size;
+  } catch {
+    return -1;
+  }
 }
