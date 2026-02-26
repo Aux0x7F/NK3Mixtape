@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_URL="${REPO_URL:-https://github.com/Aux0x7F/NK3Mixtape.git}"
+REPO_DIR="${REPO_DIR:-/opt/nk3mixtape}"
 BRANCH="${BRANCH:-main}"
-TARGET_DIR="${TARGET_DIR:-/opt/nk3mixtape}"
 SERVICE_NAME="${SERVICE_NAME:-nk3-peer-pinner}"
 
 if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
@@ -57,36 +56,37 @@ install_pkg() {
   exit 1
 }
 
-if ! command -v git >/dev/null 2>&1; then
-  install_pkg git
-fi
-
-if [[ -e "$TARGET_DIR" && ! -d "$TARGET_DIR/.git" ]]; then
-  echo "target exists but is not a git repo: $TARGET_DIR"
-  echo "set TARGET_DIR to another path and rerun"
+if [[ ! -d "$REPO_DIR/.git" ]]; then
+  echo "missing repo at $REPO_DIR"
+  echo "run installer first:"
+  echo "curl -fsSL https://raw.githubusercontent.com/Aux0x7F/NK3Mixtape/main/scripts/install-peer-pinner.sh | bash"
   exit 1
 fi
 
-run_as_root mkdir -p "$(dirname "$TARGET_DIR")"
-run_as_root mkdir -p "$TARGET_DIR"
-run_as_root chown -R "$ACTOR_USER:$ACTOR_GROUP" "$TARGET_DIR"
-
-if [[ -d "$TARGET_DIR/.git" ]]; then
-  run_as_actor git -C "$TARGET_DIR" fetch origin "$BRANCH" --depth=1
-  run_as_actor git -C "$TARGET_DIR" checkout "$BRANCH"
-  run_as_actor git -C "$TARGET_DIR" pull --ff-only origin "$BRANCH"
-else
-  run_as_actor git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$TARGET_DIR"
+if ! command -v git >/dev/null 2>&1; then
+  install_pkg git
+fi
+if ! command -v npm >/dev/null 2>&1; then
+  install_pkg npm
+fi
+if ! command -v node >/dev/null 2>&1; then
+  install_pkg nodejs
 fi
 
-run_as_root env \
-  PINNER_USER="$ACTOR_USER" \
-  PINNER_GROUP="$ACTOR_GROUP" \
-  SERVICE_NAME="$SERVICE_NAME" \
-  bash "$TARGET_DIR/scripts/setup-peer-pinner.sh"
+run_as_root chown -R "$ACTOR_USER:$ACTOR_GROUP" "$REPO_DIR"
+
+run_as_actor git -C "$REPO_DIR" fetch origin "$BRANCH" --depth=1
+run_as_actor git -C "$REPO_DIR" checkout "$BRANCH"
+run_as_actor git -C "$REPO_DIR" pull --ff-only origin "$BRANCH"
+run_as_actor npm --prefix "$REPO_DIR/peer-pinner" install --omit=dev
+
+run_as_root systemctl daemon-reload
+run_as_root systemctl restart "$SERVICE_NAME"
 
 echo
-echo "install complete"
-echo "repo: $TARGET_DIR"
+echo "updated"
+echo "repo: $REPO_DIR"
 echo "service: sudo systemctl status $SERVICE_NAME --no-pager"
-echo "update:  curl -fsSL https://raw.githubusercontent.com/Aux0x7F/NK3Mixtape/main/scripts/update-peer-pinner.sh | bash"
+if command -v curl >/dev/null 2>&1; then
+  echo "healthz: $(curl -fsS http://127.0.0.1:4848/healthz || echo unavailable)"
+fi

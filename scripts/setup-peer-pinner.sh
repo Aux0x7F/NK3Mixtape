@@ -85,7 +85,7 @@ RestartSec=2
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
-ProtectHome=true
+ProtectHome=false
 ReadWritePaths=$DATA_DIR
 
 [Install]
