@@ -38,6 +38,21 @@ run_as_actor() {
   "$@"
 }
 
+wait_for_healthz() {
+  local url="$1"
+  local attempts="${2:-20}"
+  local delay_s="${3:-1}"
+  local i
+  for ((i = 1; i <= attempts; i++)); do
+    if curl -fsS "$url" >/dev/null 2>&1; then
+      curl -fsS "$url"
+      return 0
+    fi
+    sleep "$delay_s"
+  done
+  return 1
+}
+
 install_pkg() {
   local pkg="$1"
   if command -v apt-get >/dev/null 2>&1; then
@@ -195,5 +210,15 @@ fi
 echo "repo: $TARGET_DIR"
 echo "service: sudo systemctl status $SERVICE_NAME --no-pager"
 if command -v curl >/dev/null 2>&1; then
-  echo "healthz: $(curl -fsS http://127.0.0.1:4848/healthz || echo unavailable)"
+  HEALTHZ_URL="${HEALTHZ_URL:-http://127.0.0.1:4848/healthz}"
+  if hz="$(wait_for_healthz "$HEALTHZ_URL" 25 1)"; then
+    echo "healthz: $hz"
+  else
+    echo "healthz: unavailable"
+    if command -v systemctl >/dev/null 2>&1; then
+      echo "service-active: $(systemctl is-active "$SERVICE_NAME" 2>/dev/null || true)"
+      echo "recent service logs:"
+      journalctl -u "$SERVICE_NAME" -n 20 --no-pager || true
+    fi
+  fi
 fi
