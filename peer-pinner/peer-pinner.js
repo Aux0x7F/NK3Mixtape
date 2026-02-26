@@ -8,11 +8,11 @@ const HOST = process.env.HOST || "0.0.0.0";
 const PORT = Number(process.env.PORT || 4848);
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
 const EVENTS_FILE = path.join(DATA_DIR, "events.ndjson");
-const IDENTITY_FILE = process.env.IDENTITY_FILE || path.join(DATA_DIR, "relay-identity.json");
-const INFO_NAME = process.env.RELAY_NAME || "NK3 Peer Relay";
-const INFO_DESC = process.env.RELAY_DESCRIPTION || "Mirrors + pins NK3 signed events for downstream Nostr consumers";
-const RELAY_PUBKEY_OVERRIDE = process.env.RELAY_PUBKEY || "";
-const RELAY_ALIAS_OVERRIDE = process.env.RELAY_ALIAS || "";
+const IDENTITY_FILE = process.env.IDENTITY_FILE || path.join(DATA_DIR, "peer-pinner-identity.json");
+const INFO_NAME = process.env.PINNER_NAME || "NK3 Peer Pinner";
+const INFO_DESC = process.env.PINNER_DESCRIPTION || "Mirrors + pins NK3 signed events for downstream Nostr consumers";
+const PINNER_PUBKEY_OVERRIDE = process.env.PINNER_PUBKEY || "";
+const PINNER_ALIAS_OVERRIDE = process.env.PINNER_ALIAS || "";
 const MAX_REQ_EVENTS = Number(process.env.MAX_REQ_EVENTS || 5000);
 const TAG_FILTER = String(process.env.APP_TAG || "no-kings-playlist").trim();
 const KINDS_FILTER = parseKinds(process.env.APP_KINDS || "34123,34124,34125,34126,34127,34128,34129,34130,34131,34132");
@@ -36,9 +36,9 @@ if (!Number.isFinite(MAX_REQ_EVENTS) || MAX_REQ_EVENTS <= 0) {
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 if (!fs.existsSync(EVENTS_FILE)) fs.writeFileSync(EVENTS_FILE, "", { encoding: "utf8" });
-const relayIdentity = loadOrCreateRelayIdentity(IDENTITY_FILE, RELAY_ALIAS_OVERRIDE);
-const RELAY_ALIAS = RELAY_ALIAS_OVERRIDE || relayIdentity.alias;
-const INFO_PUBKEY = RELAY_PUBKEY_OVERRIDE || relayIdentity.pubkey;
+const pinnerIdentity = loadOrCreatePeerPinnerIdentity(IDENTITY_FILE, PINNER_ALIAS_OVERRIDE);
+const PINNER_ALIAS = PINNER_ALIAS_OVERRIDE || pinnerIdentity.alias;
+const INFO_PUBKEY = PINNER_PUBKEY_OVERRIDE || pinnerIdentity.pubkey;
 
 const eventsById = new Map();
 const ordered = [];
@@ -75,7 +75,7 @@ const server = http.createServer((req, res) => {
       events: eventsById.size,
       upstream,
       relay_identity: {
-        alias: RELAY_ALIAS,
+        alias: PINNER_ALIAS,
         pubkey: INFO_PUBKEY,
       },
       logical: resolveLogicalState(),
@@ -91,8 +91,8 @@ const server = http.createServer((req, res) => {
       name: INFO_NAME,
       description: INFO_DESC,
       pubkey: INFO_PUBKEY,
-      contact: RELAY_ALIAS,
-      software: "nk3-peer-relay",
+      contact: PINNER_ALIAS,
+      software: "nk3-peer-pinner",
       version: "0.2.0",
       supported_nips: [1, 11],
       limitation: {
@@ -102,7 +102,7 @@ const server = http.createServer((req, res) => {
     return;
   }
   res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
-  res.end("nk3 peer relay\n");
+  res.end("nk3 peer pinner\n");
 });
 
 const wss = new WebSocket.Server({ noServer: true });
@@ -192,8 +192,8 @@ wss.on("connection", (ws) => {
 startUpstreamMirrors();
 
 server.listen(PORT, HOST, () => {
-  console.log(`nk3 peer relay listening ws://${HOST}:${PORT}`);
-  console.log(`relay identity @${RELAY_ALIAS} ${shortKey(INFO_PUBKEY)} (${IDENTITY_FILE})`);
+  console.log(`nk3 peer pinner listening ws://${HOST}:${PORT}`);
+  console.log(`pinner identity @${PINNER_ALIAS} ${shortKey(INFO_PUBKEY)} (${IDENTITY_FILE})`);
   if (UPSTREAM_RELAYS.length > 0) {
     console.log(`upstream mirrors: ${UPSTREAM_RELAYS.join(", ")}`);
   }
@@ -729,7 +729,7 @@ function cleanRequestId(v) {
     .slice(0, 80);
 }
 
-function loadOrCreateRelayIdentity(identityFile, aliasOverride) {
+function loadOrCreatePeerPinnerIdentity(identityFile, aliasOverride) {
   const file = String(identityFile || "").trim();
   if (!file) throw new Error("identity file path required");
 
@@ -757,7 +757,7 @@ function loadOrCreateRelayIdentity(identityFile, aliasOverride) {
   const pubkey = derivePubkey(secret_key_hex);
   const alias = cleanAlias(String(aliasOverride || aliasFromPubkey(pubkey)));
   const out = {
-    protocol: "nk3-relay-identity/v1",
+    protocol: "nk3-peer-pinner-identity/v1",
     created_at: Math.floor(Date.now() / 1000),
     alias,
     pubkey,

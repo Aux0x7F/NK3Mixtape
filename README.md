@@ -17,7 +17,9 @@ This is the shared playlist board for No Kings Day 3:
 
 That is it. Keep it moving.
 
-## Organizers
+## Keep It Alive
 
-Deploy as a static site (GitHub Pages works great).  
-If you are running support infra, you already know where to look in this repo.
+Run a peer pinner to help keep the shared stream healthy:
+
+Peer pinner one-liner (outbound-only):
+`curl -fsSL https://raw.githubusercontent.com/Aux0x7F/NK3Mixtape/main/scripts/install-peer-pinner.sh | bash`

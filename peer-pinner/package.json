@@ -1,0 +1,14 @@
+{
+  "name": "nk3-peer-pinner",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Minimal self-hosted Nostr-compatible peer pinner for NK3",
+  "main": "peer-pinner.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node peer-pinner.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
