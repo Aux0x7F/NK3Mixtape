@@ -113,6 +113,8 @@ detect_legacy_repo() {
 }
 
 prepare_target_dir() {
+  local target_parent
+  target_parent="$(dirname "$TARGET_DIR")"
   if [[ -e "$TARGET_DIR" && ! -d "$TARGET_DIR/.git" ]]; then
     if [[ -n "$(ls -A "$TARGET_DIR" 2>/dev/null || true)" ]]; then
       local backup="${TARGET_DIR}.backup.$(date +%s)"
@@ -122,11 +124,13 @@ prepare_target_dir() {
       run_as_root rm -rf "$TARGET_DIR"
     fi
   fi
-  run_as_root mkdir -p "$(dirname "$TARGET_DIR")"
+  run_as_root mkdir -p "$target_parent"
+  run_as_root chmod 755 "$target_parent" || true
   if [[ ! -e "$TARGET_DIR" ]]; then
     run_as_root mkdir -p "$TARGET_DIR"
   fi
   run_as_root chown -R "$ACTOR_USER:$ACTOR_GROUP" "$TARGET_DIR"
+  run_as_root chmod 755 "$TARGET_DIR" || true
 }
 
 migrate_legacy_repo_if_needed() {

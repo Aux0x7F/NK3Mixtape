@@ -21,6 +21,19 @@ APP_KINDS="${APP_KINDS:-34123,34124,34125,34126,34127,34128,34129,34130,34131,34
 IDENTITY_FILE="${IDENTITY_FILE:-$DATA_DIR/peer-pinner-identity.json}"
 PINNER_ALIAS="${PINNER_ALIAS:-}"
 
+run_as_service_user() {
+  if command -v sudo >/dev/null 2>&1; then
+    sudo -u "$PINNER_USER" -H "$@"
+  elif command -v runuser >/dev/null 2>&1; then
+    runuser -u "$PINNER_USER" -- "$@"
+  elif [[ "$(id -un)" == "$PINNER_USER" ]]; then
+    "$@"
+  else
+    echo "need sudo or runuser to execute as $PINNER_USER"
+    exit 1
+  fi
+}
+
 echo "root:      $ROOT_DIR"
 echo "pinner dir:$PINNER_DIR"
 echo "user:      $PINNER_USER:$PINNER_GROUP"
@@ -51,14 +64,21 @@ fi
 
 mkdir -p "$DATA_DIR"
 chown -R "$PINNER_USER:$PINNER_GROUP" "$PINNER_DIR"
+chmod 755 "$PINNER_DIR" "$DATA_DIR" || true
 
-if command -v sudo >/dev/null 2>&1; then
-  sudo -u "$PINNER_USER" npm --prefix "$PINNER_DIR" install --omit=dev
-else
-  runuser -u "$PINNER_USER" -- npm --prefix "$PINNER_DIR" install --omit=dev
+if ! run_as_service_user test -x "$PINNER_DIR"; then
+  echo "service user $PINNER_USER cannot access $PINNER_DIR, falling back to root"
+  PINNER_USER="root"
+  PINNER_GROUP="root"
+  chown -R root:root "$PINNER_DIR"
 fi
 
-NODE_BIN="$(command -v node)"
+run_as_service_user npm --prefix "$PINNER_DIR" install --omit=dev
+
+NODE_BIN="$(run_as_service_user sh -lc 'command -v node || true')"
+if [[ -z "$NODE_BIN" ]]; then
+  NODE_BIN="$(command -v node)"
+fi
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 cat > "$SERVICE_FILE" <<EOF
 [Unit]
