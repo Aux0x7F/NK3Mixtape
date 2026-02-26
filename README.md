@@ -22,4 +22,4 @@ That is it. Keep it moving.
 Run a peer pinner to help keep the shared stream healthy:
 
 Install or update one-liner (outbound-only, installs/migrates to `/opt/nk3mixtape`):
-`curl -fsSL https://raw.githubusercontent.com/Aux0x7F/NK3Mixtape/main/scripts/update-peer-pinner.sh | bash`
+`curl -fsSL https://raw.githubusercontent.com/Aux0x7F/NK3Mixtape/main/scripts/install-or-update.sh | bash`
