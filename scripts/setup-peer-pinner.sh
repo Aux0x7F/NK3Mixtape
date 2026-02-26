@@ -15,6 +15,7 @@ PINNER_GROUP="${PINNER_GROUP:-$PINNER_USER}"
 HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-4848}"
 DATA_DIR="${DATA_DIR:-$PINNER_DIR/data}"
+EVENTS_FILE="${EVENTS_FILE:-$DATA_DIR/events.ndjson}"
 UPSTREAM_RELAYS="${UPSTREAM_RELAYS:-wss://relay.damus.io,wss://relay.primal.net,wss://nos.lol}"
 APP_TAG="${APP_TAG:-no-kings-playlist}"
 APP_KINDS="${APP_KINDS:-34123,34124,34125,34126,34127,34128,34129,34130,34131,34132}"
@@ -39,6 +40,7 @@ echo "pinner dir:$PINNER_DIR"
 echo "user:      $PINNER_USER:$PINNER_GROUP"
 echo "bind:      $HOST:$PORT"
 echo "data dir:  $DATA_DIR"
+echo "events:    $EVENTS_FILE"
 echo "identity:  $IDENTITY_FILE"
 echo "upstream:  $UPSTREAM_RELAYS"
 
@@ -73,6 +75,10 @@ if ! run_as_service_user test -x "$PINNER_DIR"; then
   chown -R root:root "$PINNER_DIR"
 fi
 
+touch "$EVENTS_FILE"
+chown "$PINNER_USER:$PINNER_GROUP" "$EVENTS_FILE"
+chmod 640 "$EVENTS_FILE" || true
+
 run_as_service_user npm --prefix "$PINNER_DIR" install --omit=dev
 
 NODE_BIN="$(run_as_service_user sh -lc 'command -v node || true')"
@@ -94,6 +100,7 @@ WorkingDirectory=$PINNER_DIR
 Environment=HOST=$HOST
 Environment=PORT=$PORT
 Environment=DATA_DIR=$DATA_DIR
+Environment=EVENTS_FILE=$EVENTS_FILE
 Environment=UPSTREAM_RELAYS=$UPSTREAM_RELAYS
 Environment=APP_TAG=$APP_TAG
 Environment=APP_KINDS=$APP_KINDS

@@ -38,6 +38,10 @@ run_as_actor() {
   "$@"
 }
 
+RUNTIME_DATA_DIR=""
+RUNTIME_EVENTS_FILE=""
+RUNTIME_IDENTITY_FILE=""
+
 wait_for_healthz() {
   local url="$1"
   local attempts="${2:-20}"
@@ -75,6 +79,49 @@ install_pkg() {
 is_git_repo() {
   local dir="$1"
   [[ -n "$dir" && -d "$dir/.git" ]]
+}
+
+service_env_var() {
+  local key="$1"
+  if ! command -v systemctl >/dev/null 2>&1; then
+    return 1
+  fi
+  run_as_root systemctl show "$SERVICE_NAME" -p Environment --value 2>/dev/null | \
+    tr ' ' '\n' | sed -n "s/^${key}=//p" | head -n1
+}
+
+ensure_runtime_data_files() {
+  local svc_wd=""
+  local svc_user=""
+  local svc_group=""
+  local data_dir=""
+  local events_file=""
+  local identity_file=""
+
+  if command -v systemctl >/dev/null 2>&1; then
+    svc_wd="$(run_as_root systemctl show "$SERVICE_NAME" -p WorkingDirectory --value 2>/dev/null || true)"
+    svc_user="$(run_as_root systemctl show "$SERVICE_NAME" -p User --value 2>/dev/null || true)"
+    svc_group="$(run_as_root systemctl show "$SERVICE_NAME" -p Group --value 2>/dev/null || true)"
+    data_dir="$(service_env_var DATA_DIR || true)"
+    events_file="$(service_env_var EVENTS_FILE || true)"
+    identity_file="$(service_env_var IDENTITY_FILE || true)"
+  fi
+
+  [[ -n "$data_dir" ]] || data_dir="${svc_wd:-$TARGET_DIR/peer-pinner}/data"
+  [[ -n "$events_file" ]] || events_file="$data_dir/events.ndjson"
+  [[ -n "$identity_file" ]] || identity_file="$data_dir/peer-pinner-identity.json"
+  [[ -n "$svc_user" ]] || svc_user="$ACTOR_USER"
+  [[ -n "$svc_group" ]] || svc_group="$ACTOR_GROUP"
+
+  run_as_root mkdir -p "$data_dir"
+  run_as_root touch "$events_file"
+  run_as_root chown -R "$svc_user:$svc_group" "$data_dir" || true
+  run_as_root chmod 755 "$data_dir" || true
+  run_as_root chmod 640 "$events_file" || true
+
+  RUNTIME_DATA_DIR="$data_dir"
+  RUNTIME_EVENTS_FILE="$events_file"
+  RUNTIME_IDENTITY_FILE="$identity_file"
 }
 
 sync_repo_branch() {
@@ -201,6 +248,8 @@ run_as_root env \
   SERVICE_NAME="$SERVICE_NAME" \
   bash "$TARGET_DIR/scripts/setup-peer-pinner.sh"
 
+ensure_runtime_data_files
+
 echo
 if [[ "$fresh_install" -eq 1 ]]; then
   echo "installed"
@@ -209,6 +258,15 @@ else
 fi
 echo "repo: $TARGET_DIR"
 echo "service: sudo systemctl status $SERVICE_NAME --no-pager"
+if [[ -n "$RUNTIME_DATA_DIR" ]]; then
+  echo "data-dir: $RUNTIME_DATA_DIR"
+fi
+if [[ -n "$RUNTIME_EVENTS_FILE" ]]; then
+  echo "events-file: $RUNTIME_EVENTS_FILE"
+fi
+if [[ -n "$RUNTIME_IDENTITY_FILE" ]]; then
+  echo "identity-file: $RUNTIME_IDENTITY_FILE"
+fi
 if command -v curl >/dev/null 2>&1; then
   HEALTHZ_URL="${HEALTHZ_URL:-http://127.0.0.1:4848/healthz}"
   if hz="$(wait_for_healthz "$HEALTHZ_URL" 25 1)"; then
