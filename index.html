@@ -42,6 +42,25 @@
     <section id="list" class="list"></section>
   </main>
 
+  <div id="miniPlayer" class="mini-player hidden" aria-live="polite">
+    <div class="mini-top">
+      <div class="mini-meta">
+        <div id="miniPlayerTitle" class="mini-title"></div>
+        <div id="miniPlayerArtist" class="mini-artist"></div>
+      </div>
+      <div class="mini-controls">
+        <button id="miniPrevBtn" type="button" aria-label="previous">⏮</button>
+        <button id="miniPlayPauseBtn" type="button" aria-label="play pause">⏯</button>
+        <button id="miniNextBtn" type="button" aria-label="next">⏭</button>
+      </div>
+    </div>
+    <div class="mini-progress-row">
+      <span id="miniElapsed" class="mini-time">0:00</span>
+      <input id="miniProgress" class="mini-progress" type="range" min="0" max="100" value="0" step="1" aria-label="seek">
+      <span id="miniDuration" class="mini-time">0:00</span>
+    </div>
+  </div>
+
   <template id="identityTemplateLoggedIn">
     <div class="signed-in">
       <button id="menuBtn" type="button" aria-label="Menu">☰</button>

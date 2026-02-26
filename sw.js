@@ -1,4 +1,4 @@
-const CACHE_NAME = "nk3-shell-v16";
+const CACHE_NAME = "nk3-shell-v17";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -19,8 +19,15 @@ self.addEventListener("install", (event) => {
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE_NAME);
     await cache.addAll(APP_SHELL);
-    await self.skipWaiting();
   })());
+});
+
+self.addEventListener("message", (event) => {
+  const msg = event?.data;
+  if (!msg || typeof msg !== "object") return;
+  if (msg.type === "SKIP_WAITING") {
+    void self.skipWaiting();
+  }
 });
 
 self.addEventListener("activate", (event) => {

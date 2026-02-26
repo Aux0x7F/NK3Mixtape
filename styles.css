@@ -724,6 +724,98 @@ button:active {
   gap: 0.5rem;
 }
 
+.mini-player {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 110;
+  border-top: 1px solid #b7844e;
+  border-left: 0;
+  border-right: 0;
+  border-bottom: 0;
+  border-radius: 0;
+  background:
+    linear-gradient(165deg, rgba(255, 246, 222, 0.95), rgba(255, 237, 206, 0.92)),
+    var(--panel);
+  box-shadow: 0 -14px 28px -22px rgba(20, 11, 7, 0.6);
+  padding: 0.56rem 0.9rem 0.52rem;
+  display: grid;
+  gap: 0.38rem;
+}
+
+.mini-top {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.mini-meta {
+  min-width: 0;
+}
+
+.mini-title {
+  font-family: "Teko", sans-serif;
+  font-size: 1.14rem;
+  letter-spacing: 0.03em;
+  line-height: 1;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mini-artist {
+  color: var(--muted);
+  font-size: 0.84rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mini-controls {
+  display: inline-flex;
+  gap: 0.32rem;
+}
+
+.mini-controls button {
+  width: 2.2rem;
+  height: 1.7rem;
+  padding: 0;
+  border-radius: 0.55rem;
+  display: grid;
+  place-items: center;
+  background: #ffeecf;
+}
+
+.mini-controls button svg {
+  width: 1rem;
+  height: 1rem;
+  fill: currentColor;
+}
+
+.mini-progress-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.42rem;
+}
+
+.mini-time {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.74rem;
+  color: #5e4636;
+  min-width: 2.35rem;
+  text-align: center;
+}
+
+.mini-progress {
+  width: 100%;
+  accent-color: #cf1f17;
+  cursor: pointer;
+}
+
 .yt-host {
   position: fixed;
   width: 1px;
@@ -746,6 +838,14 @@ button:active {
   pointer-events: none;
 }
 
+.mini-player-visible .app {
+  padding-bottom: 6.7rem;
+}
+
+.mini-player-visible .toast-stack {
+  bottom: 7rem;
+}
+
 .toast {
   border: 1px solid #c7925a;
   border-radius: 0.72rem;
@@ -758,6 +858,24 @@ button:active {
   opacity: 0;
   transform: translateY(6px);
   transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.toast.action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  pointer-events: auto;
+}
+
+.toast-action {
+  border: 1px solid #a8723f;
+  background: #fff4df;
+  color: #2a1a12;
+  border-radius: 0.5rem;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.78rem;
+  line-height: 1.1;
+  text-transform: lowercase;
 }
 
 .toast.info {
@@ -821,5 +939,25 @@ button:active {
 
   .vote-stack {
     gap: 0.24rem;
+  }
+
+  .mini-player {
+    left: 0;
+    right: 0;
+    bottom: 0;
+    padding: 0.5rem 0.62rem 0.46rem;
+  }
+
+  .mini-title {
+    font-size: 1.02rem;
+  }
+
+  .mini-controls button {
+    width: 2.1rem;
+    height: 1.62rem;
+  }
+
+  .mini-player-visible .app {
+    padding-bottom: 6.4rem;
   }
 }
