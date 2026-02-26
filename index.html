@@ -152,6 +152,21 @@
     </div>
   </div>
 
+  <div id="editSongModal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card">
+      <button class="modal-close" type="button" data-close-modal="editSongModal">x</button>
+      <form id="editEntryForm" class="entry-form" autocomplete="off">
+        <input id="editTitleInput" name="title" placeholder="title" maxlength="120" required>
+        <input id="editArtistInput" name="artist" placeholder="artist" maxlength="120" required>
+        <input id="editYoutubeInput" name="youtube" placeholder="youtube url (optional)" maxlength="300">
+        <div class="entry-actions">
+          <button type="submit">save</button>
+          <button id="cancelEditSongBtn" type="button" class="ghost">cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <div id="deleteConfirmModal" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modal-card">
       <button class="modal-close" type="button" data-close-modal="deleteConfirmModal">x</button>

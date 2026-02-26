@@ -89,6 +89,7 @@ const state = {
   },
   userModalContext: null,
   deleteConfirmContext: null,
+  editContext: null,
 };
 
 let renderQueued = false;
@@ -111,6 +112,12 @@ const el = {
   openAddSongBtn: document.getElementById("openAddSongBtn"),
   cancelAddSongBtn: document.getElementById("cancelAddSongBtn"),
   addSongModal: document.getElementById("addSongModal"),
+  editSongModal: document.getElementById("editSongModal"),
+  editEntryForm: document.getElementById("editEntryForm"),
+  editTitleInput: document.getElementById("editTitleInput"),
+  editArtistInput: document.getElementById("editArtistInput"),
+  editYoutubeInput: document.getElementById("editYoutubeInput"),
+  cancelEditSongBtn: document.getElementById("cancelEditSongBtn"),
   publishSnapshotBtn: document.getElementById("publishSnapshotBtn"),
   showRevokedToggle: document.getElementById("showRevokedToggle"),
   adminPubkeyInput: document.getElementById("adminPubkeyInput"),
@@ -198,6 +205,11 @@ function bind() {
       closeModal(el.addSongModal);
     });
   }
+  if (el.cancelEditSongBtn) {
+    el.cancelEditSongBtn.addEventListener("click", () => {
+      closeModal(el.editSongModal);
+    });
+  }
   if (el.splashInstallBtn) {
     el.splashInstallBtn.addEventListener("click", () => void onInstallClick());
   }
@@ -205,6 +217,11 @@ function bind() {
     el.menuInstallBtn.addEventListener("click", () => void onInstallClick());
   }
   el.entryForm.addEventListener("submit", onEntrySubmit);
+  if (el.editEntryForm) {
+    el.editEntryForm.addEventListener("submit", (event) => {
+      void onEditEntrySubmit(event);
+    });
+  }
   if (el.publishSnapshotBtn) {
     el.publishSnapshotBtn.addEventListener("click", onPublishSnapshot);
   }
@@ -269,7 +286,7 @@ function bind() {
       closeModal(document.getElementById(id));
     });
   });
-  [el.menuModal, el.adminModal, el.profileModal, el.userModal, el.addSongModal, el.deleteConfirmModal].forEach((modal) => {
+  [el.menuModal, el.adminModal, el.profileModal, el.userModal, el.addSongModal, el.editSongModal, el.deleteConfirmModal].forEach((modal) => {
     if (!modal) return;
     modal.addEventListener("click", (event) => {
       if (event.target === modal) closeModal(modal);
@@ -516,9 +533,11 @@ function renderAccess() {
     closeModal(el.profileModal);
     closeModal(el.userModal);
     closeModal(el.addSongModal);
+    closeModal(el.editSongModal);
     closeModal(el.deleteConfirmModal);
     state.userModalContext = null;
     state.deleteConfirmContext = null;
+    state.editContext = null;
     if (el.menuIdentity) el.menuIdentity.textContent = "";
     el.identityContainer.replaceChildren();
   }
@@ -552,6 +571,11 @@ function renderIdentity() {
   const locked = Boolean(activeBanForPubkey(state.identity.pubkey));
   for (const control of el.entryForm.querySelectorAll("input,button")) {
     control.disabled = locked;
+  }
+  if (el.editEntryForm) {
+    for (const control of el.editEntryForm.querySelectorAll("input,button")) {
+      control.disabled = locked;
+    }
   }
   if (!isAdminMe()) {
     state.showRevoked = false;
@@ -892,21 +916,28 @@ function applyEntry(ev) {
   const youtube_id = youtubeIdFromAny(p.youtube_id || p.youtube_url || firstTag(ev, "yt"));
   const youtube_url = youtube_id ? canonicalYouTubeUrl(youtube_id) : "";
   const user = normName(p.user || "");
+  const signer = normPk(ev.pubkey);
   const created_at = unixOr(p.created_at, ev.created_at);
   if (!entry_id || !title || !artist) return false;
-  if (user) rememberName(ev.pubkey, user, ev.created_at);
+  if (user) rememberName(signer, user, ev.created_at);
+
+  const existingOwner = ownerPubkeyForEntry(entry_id);
+  const owner_pubkey = existingOwner || signer;
   const cur = state.entries.get(entry_id);
-  if (cur && cur.event_created_at > ev.created_at) return false;
+  if (cur && (cur.event_created_at > ev.created_at || (cur.event_created_at === ev.created_at && (cur.event_id || "") >= ev.id))) {
+    return false;
+  }
   state.entries.set(entry_id, {
     entry_id,
     title,
     artist,
     youtube_id,
     youtube_url,
-    user: user || resolveName(ev.pubkey),
+    user: user || resolveName(owner_pubkey),
     created_at,
-    pubkey: ev.pubkey,
+    pubkey: owner_pubkey,
     event_created_at: ev.created_at,
+    event_id: ev.id,
   });
   return true;
 }
@@ -1231,6 +1262,20 @@ function renderRow(r) {
   titleLine.prepend(title);
   artistLine.appendChild(artist);
   metaLine.append(author);
+  const canEdit = Boolean(state.identity && canPubkeyModerateEntry(state.identity.pubkey, r.entry_id));
+  if (canEdit) {
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.className = "item-edit-btn";
+    edit.title = "edit song";
+    edit.setAttribute("aria-label", "edit song");
+    edit.appendChild(createEditIcon());
+    edit.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openEditModal(r);
+    });
+    titleLine.appendChild(edit);
+  }
   if (isAdminMe() && !r.revoked) {
     const del = document.createElement("button");
     del.type = "button";
@@ -1293,6 +1338,18 @@ function createTrashIcon() {
   return svg;
 }
 
+function createEditIcon() {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+  const path = document.createElementNS(ns, "path");
+  path.setAttribute("d", "M3 17.25V21h3.75L18.8 8.95l-3.75-3.75L3 17.25zm17.71-10.04a1 1 0 0 0 0-1.41l-2.5-2.5a1 1 0 0 0-1.41 0l-1.5 1.5 3.75 3.75 1.66-1.34z");
+  svg.appendChild(path);
+  return svg;
+}
+
 function createPlayPauseIcon(isPlaying) {
   const ns = "http://www.w3.org/2000/svg";
   const svg = document.createElementNS(ns, "svg");
@@ -1334,37 +1391,140 @@ async function onEntrySubmit(e) {
   if (meBan) {
     return setStatus(meBan.until_ts ? `banned until ${fmtDate(meBan.until_ts)}` : "banned");
   }
-  const title = cleanText(el.titleInput.value, 120);
-  const artist = cleanText(el.artistInput.value, 120);
-  const youtubeRaw = cleanText(el.youtubeInput.value, 300);
-  const youtube_id = youtubeIdFromAny(youtubeRaw);
-  const youtube_url = youtube_id ? canonicalYouTubeUrl(youtube_id) : "";
-  if (!title) {
-    el.titleInput?.focus();
-    return setStatus("song title required");
-  }
-  if (!artist) {
-    el.artistInput?.focus();
-    return setStatus("artist required");
-  }
-  if (youtubeRaw && !youtube_id) return setStatus("invalid youtube url");
+  const fields = parseEntryFields(el.titleInput?.value || "", el.artistInput?.value || "", el.youtubeInput?.value || "", {
+    titleEl: el.titleInput,
+    artistEl: el.artistInput,
+    youtubeEl: el.youtubeInput,
+  });
+  if (!fields) return;
 
   const created_at = nowSec();
   const entry_id = `entry:${state.identity.pubkey.slice(0, 8)}:${Date.now().toString(36)}`;
-  const payload = { entry_id, title, artist, youtube_id, youtube_url, user: state.identity.name, created_at };
-  const tags = [["d", entry_id]];
-  if (youtube_id) tags.push(["yt", youtube_id]);
-  const ev = await signEvent(APP.kinds.entry, tags, payload);
-  if (!ev) return;
-
-  const ok = await publishEvent(ev);
-  ingestEvent(ev);
+  const ok = await publishEntryEvent({
+    entry_id,
+    title: fields.title,
+    artist: fields.artist,
+    youtube_id: fields.youtube_id,
+    youtube_url: fields.youtube_url,
+    user: state.identity.name,
+    owner_pubkey: state.identity.pubkey,
+    created_at,
+  });
+  if (ok < 0) return;
   el.titleInput.value = "";
   el.artistInput.value = "";
   el.youtubeInput.value = "";
   closeModal(el.addSongModal);
   renderList();
   setStatus(`published ${ok}/${APP.relays.length}`);
+}
+
+function openEditModal(row) {
+  if (!state.identity) return setStatus("sign in first");
+  const entry_id = cleanEntryId(row?.entry_id || "");
+  if (!entry_id) return setStatus("invalid entry");
+  if (!canPubkeyModerateEntry(state.identity.pubkey, entry_id)) return setStatus("not allowed");
+
+  const owner_pubkey = normPk(row?.owner_pubkey || ownerPubkeyForEntry(entry_id));
+  const owner_name = normName(row?.user || (owner_pubkey ? resolveName(owner_pubkey) : "")) || state.identity.name;
+  const created_at = unixOr(row?.created_at, nowSec());
+  const youtube = cleanText(row?.youtube_url || (row?.youtube_id ? canonicalYouTubeUrl(row.youtube_id) : ""), 300);
+
+  state.editContext = { entry_id, owner_pubkey, owner_name, created_at };
+  if (el.editTitleInput) el.editTitleInput.value = cleanText(row?.title || "", 120);
+  if (el.editArtistInput) el.editArtistInput.value = cleanText(row?.artist || "", 120);
+  if (el.editYoutubeInput) el.editYoutubeInput.value = youtube;
+  openModal(el.editSongModal);
+  el.editTitleInput?.focus();
+}
+
+async function onEditEntrySubmit(event) {
+  event.preventDefault();
+  if (!state.identity) return setStatus("sign in first");
+  const meBan = activeBanForPubkey(state.identity.pubkey);
+  if (meBan) {
+    return setStatus(meBan.until_ts ? `banned until ${fmtDate(meBan.until_ts)}` : "banned");
+  }
+
+  const ctx = state.editContext;
+  const entry_id = cleanEntryId(ctx?.entry_id || "");
+  if (!entry_id) return setStatus("select a song first");
+  if (!canPubkeyModerateEntry(state.identity.pubkey, entry_id)) return setStatus("not allowed");
+
+  const fields = parseEntryFields(el.editTitleInput?.value || "", el.editArtistInput?.value || "", el.editYoutubeInput?.value || "", {
+    titleEl: el.editTitleInput,
+    artistEl: el.editArtistInput,
+    youtubeEl: el.editYoutubeInput,
+  });
+  if (!fields) return;
+
+  const owner_pubkey = isHex64(normPk(ctx?.owner_pubkey || ""))
+    ? normPk(ctx.owner_pubkey)
+    : ownerPubkeyForEntry(entry_id) || state.identity.pubkey;
+  const user = normName(ctx?.owner_name || (owner_pubkey ? resolveName(owner_pubkey) : state.identity.name)) || state.identity.name;
+  const created_at = unixOr(ctx?.created_at, nowSec());
+
+  const ok = await publishEntryEvent({
+    entry_id,
+    title: fields.title,
+    artist: fields.artist,
+    youtube_id: fields.youtube_id,
+    youtube_url: fields.youtube_url,
+    user,
+    owner_pubkey,
+    created_at,
+  });
+  if (ok < 0) return;
+
+  closeModal(el.editSongModal);
+  renderList();
+  setStatus(`updated ${ok}/${APP.relays.length}`);
+}
+
+function parseEntryFields(titleRaw, artistRaw, youtubeRawInput, { titleEl, artistEl, youtubeEl } = {}) {
+  const title = cleanText(titleRaw, 120);
+  const artist = cleanText(artistRaw, 120);
+  const youtubeRaw = cleanText(youtubeRawInput, 300);
+  const youtube_id = youtubeIdFromAny(youtubeRaw);
+  const youtube_url = youtube_id ? canonicalYouTubeUrl(youtube_id) : "";
+
+  if (!title) {
+    titleEl?.focus();
+    setStatus("song title required");
+    return null;
+  }
+  if (!artist) {
+    artistEl?.focus();
+    setStatus("artist required");
+    return null;
+  }
+  if (youtubeRaw && !youtube_id) {
+    youtubeEl?.focus();
+    setStatus("invalid youtube url");
+    return null;
+  }
+
+  return { title, artist, youtube_id, youtube_url };
+}
+
+async function publishEntryEvent({ entry_id, title, artist, youtube_id, youtube_url, user, owner_pubkey, created_at }) {
+  const payload = {
+    entry_id,
+    title,
+    artist,
+    youtube_id,
+    youtube_url,
+    user: normName(user),
+    owner_pubkey: normPk(owner_pubkey || ""),
+    created_at: unixOr(created_at, nowSec()),
+  };
+  const tags = [["d", entry_id]];
+  if (payload.youtube_id) tags.push(["yt", payload.youtube_id]);
+  const ev = await signEvent(APP.kinds.entry, tags, payload);
+  if (!ev) return -1;
+  const ok = await publishEvent(ev);
+  ingestEvent(ev);
+  return ok;
 }
 
 async function castVote(entry_id, targetValue) {
@@ -2600,6 +2760,9 @@ function closeModal(node) {
   node.classList.add("hidden");
   if (node === el.userModal) {
     state.userModalContext = null;
+  }
+  if (node === el.editSongModal) {
+    state.editContext = null;
   }
   if (node === el.deleteConfirmModal) {
     state.deleteConfirmContext = null;

@@ -407,18 +407,36 @@ button:active {
   text-underline-offset: 2px;
 }
 
+.item-edit-btn,
 .item-delete-btn {
   width: 2rem;
   height: 1.62rem;
   padding: 0;
   border-radius: 0.56rem;
+}
+
+.item-edit-btn {
+  background: #efe1c8;
+  border-color: #9b8260;
+}
+
+.item-delete-btn {
   background: #f6dfc8;
   border-color: #bb7452;
 }
 
+.item-edit-btn svg,
 .item-delete-btn svg {
   width: 1.05rem;
   height: 1.05rem;
+  vertical-align: middle;
+}
+
+.item-edit-btn svg {
+  fill: #5a4630;
+}
+
+.item-delete-btn svg {
   fill: #7c1f14;
   vertical-align: middle;
 }
