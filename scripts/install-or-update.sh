@@ -62,6 +62,22 @@ is_git_repo() {
   [[ -n "$dir" && -d "$dir/.git" ]]
 }
 
+sync_repo_branch() {
+  run_as_actor git -C "$TARGET_DIR" remote set-url origin "$REPO_URL"
+  run_as_actor git -C "$TARGET_DIR" fetch origin "$BRANCH" --depth=1
+  run_as_actor git -C "$TARGET_DIR" checkout "$BRANCH" >/dev/null 2>&1 || \
+    run_as_actor git -C "$TARGET_DIR" checkout -B "$BRANCH"
+  if run_as_actor git -C "$TARGET_DIR" pull --ff-only origin "$BRANCH"; then
+    return 0
+  fi
+
+  local backup_ref="pre-reset-$(date +%Y%m%d%H%M%S)"
+  echo "repo diverged; saving local HEAD as $backup_ref then resetting to origin/$BRANCH"
+  run_as_actor git -C "$TARGET_DIR" branch "$backup_ref" HEAD >/dev/null 2>&1 || true
+  run_as_actor git -C "$TARGET_DIR" reset --hard "origin/$BRANCH"
+  run_as_actor git -C "$TARGET_DIR" clean -fd
+}
+
 service_workdir() {
   local file="/etc/systemd/system/${SERVICE_NAME}.service"
   if [[ ! -f "$file" ]]; then
@@ -154,9 +170,7 @@ migrate_legacy_repo_if_needed
 
 fresh_install=0
 if is_git_repo "$TARGET_DIR"; then
-  run_as_actor git -C "$TARGET_DIR" fetch origin "$BRANCH" --depth=1
-  run_as_actor git -C "$TARGET_DIR" checkout "$BRANCH"
-  run_as_actor git -C "$TARGET_DIR" pull --ff-only origin "$BRANCH"
+  sync_repo_branch
 else
   run_as_root rm -rf "$TARGET_DIR"
   run_as_root mkdir -p "$(dirname "$TARGET_DIR")"
