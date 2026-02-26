@@ -1339,7 +1339,14 @@ async function onEntrySubmit(e) {
   const youtubeRaw = cleanText(el.youtubeInput.value, 300);
   const youtube_id = youtubeIdFromAny(youtubeRaw);
   const youtube_url = youtube_id ? canonicalYouTubeUrl(youtube_id) : "";
-  if (!title || !artist) return;
+  if (!title) {
+    el.titleInput?.focus();
+    return setStatus("song title required");
+  }
+  if (!artist) {
+    el.artistInput?.focus();
+    return setStatus("artist required");
+  }
   if (youtubeRaw && !youtube_id) return setStatus("invalid youtube url");
 
   const created_at = nowSec();
