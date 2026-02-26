@@ -67,15 +67,11 @@ sync_repo_branch() {
   run_as_actor git -C "$TARGET_DIR" fetch origin "$BRANCH" --depth=1
   run_as_actor git -C "$TARGET_DIR" checkout "$BRANCH" >/dev/null 2>&1 || \
     run_as_actor git -C "$TARGET_DIR" checkout -B "$BRANCH"
-  if run_as_actor git -C "$TARGET_DIR" pull --ff-only origin "$BRANCH"; then
-    return 0
-  fi
-
   local backup_ref="pre-reset-$(date +%Y%m%d%H%M%S)"
-  echo "repo diverged; saving local HEAD as $backup_ref then resetting to origin/$BRANCH"
+  echo "hard syncing repo to origin/$BRANCH (saving previous HEAD as $backup_ref)"
   run_as_actor git -C "$TARGET_DIR" branch "$backup_ref" HEAD >/dev/null 2>&1 || true
   run_as_actor git -C "$TARGET_DIR" reset --hard "origin/$BRANCH"
-  run_as_actor git -C "$TARGET_DIR" clean -fd
+  run_as_actor git -C "$TARGET_DIR" clean -fdx
 }
 
 service_workdir() {
