@@ -1,92 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_URL="${REPO_URL:-https://github.com/Aux0x7F/NK3Mixtape.git}"
-BRANCH="${BRANCH:-main}"
-TARGET_DIR="${TARGET_DIR:-/opt/nk3mixtape}"
-SERVICE_NAME="${SERVICE_NAME:-nk3-peer-pinner}"
-
-if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
-  ROOT_CMD=()
-  ACTOR_USER="${SUDO_USER:-$(logname 2>/dev/null || id -un)}"
-else
-  if ! command -v sudo >/dev/null 2>&1; then
-    echo "sudo is required (or run this script as root)"
-    exit 1
-  fi
-  ROOT_CMD=(sudo)
-  ACTOR_USER="$(id -un)"
-fi
-ACTOR_GROUP="$(id -gn "$ACTOR_USER" 2>/dev/null || echo "$ACTOR_USER")"
-
-run_as_root() {
-  "${ROOT_CMD[@]}" "$@"
-}
-
-run_as_actor() {
-  if [[ "${EUID:-$(id -u)}" -eq 0 && "$ACTOR_USER" != "root" ]]; then
-    if command -v sudo >/dev/null 2>&1; then
-      sudo -u "$ACTOR_USER" -H "$@"
-    elif command -v runuser >/dev/null 2>&1; then
-      runuser -u "$ACTOR_USER" -- "$@"
-    else
-      echo "need sudo or runuser to switch to $ACTOR_USER"
-      exit 1
-    fi
-    return
-  fi
-  "$@"
-}
-
-install_pkg() {
-  local pkg="$1"
-  if command -v apt-get >/dev/null 2>&1; then
-    run_as_root apt-get update
-    run_as_root apt-get install -y "$pkg"
-    return
-  fi
-  if command -v dnf >/dev/null 2>&1; then
-    run_as_root dnf install -y "$pkg"
-    return
-  fi
-  if command -v yum >/dev/null 2>&1; then
-    run_as_root yum install -y "$pkg"
-    return
-  fi
-  echo "missing package manager; install $pkg manually"
-  exit 1
-}
-
-if ! command -v git >/dev/null 2>&1; then
-  install_pkg git
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)"
+if [[ -n "$SELF_DIR" && -f "$SELF_DIR/update-peer-pinner.sh" ]]; then
+  exec bash "$SELF_DIR/update-peer-pinner.sh" "$@"
 fi
 
-if [[ -e "$TARGET_DIR" && ! -d "$TARGET_DIR/.git" ]]; then
-  echo "target exists but is not a git repo: $TARGET_DIR"
-  echo "set TARGET_DIR to another path and rerun"
-  exit 1
+UPDATE_URL="${UPDATE_URL:-https://raw.githubusercontent.com/Aux0x7F/NK3Mixtape/main/scripts/update-peer-pinner.sh}"
+if command -v curl >/dev/null 2>&1; then
+  exec bash -c "$(curl -fsSL "$UPDATE_URL")" -- "$@"
+fi
+if command -v wget >/dev/null 2>&1; then
+  exec bash -c "$(wget -qO- "$UPDATE_URL")" -- "$@"
 fi
 
-run_as_root mkdir -p "$(dirname "$TARGET_DIR")"
-run_as_root mkdir -p "$TARGET_DIR"
-run_as_root chown -R "$ACTOR_USER:$ACTOR_GROUP" "$TARGET_DIR"
-
-if [[ -d "$TARGET_DIR/.git" ]]; then
-  run_as_actor git -C "$TARGET_DIR" fetch origin "$BRANCH" --depth=1
-  run_as_actor git -C "$TARGET_DIR" checkout "$BRANCH"
-  run_as_actor git -C "$TARGET_DIR" pull --ff-only origin "$BRANCH"
-else
-  run_as_actor git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$TARGET_DIR"
-fi
-
-run_as_root env \
-  PINNER_USER="$ACTOR_USER" \
-  PINNER_GROUP="$ACTOR_GROUP" \
-  SERVICE_NAME="$SERVICE_NAME" \
-  bash "$TARGET_DIR/scripts/setup-peer-pinner.sh"
-
-echo
-echo "install complete"
-echo "repo: $TARGET_DIR"
-echo "service: sudo systemctl status $SERVICE_NAME --no-pager"
-echo "update:  curl -fsSL https://raw.githubusercontent.com/Aux0x7F/NK3Mixtape/main/scripts/update-peer-pinner.sh | bash"
+echo "need curl or wget"
+exit 1

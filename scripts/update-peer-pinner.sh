@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_DIR="${REPO_DIR:-/opt/nk3mixtape}"
+REPO_URL="${REPO_URL:-https://github.com/Aux0x7F/NK3Mixtape.git}"
 BRANCH="${BRANCH:-main}"
+TARGET_DIR="${TARGET_DIR:-/opt/nk3mixtape}"
 SERVICE_NAME="${SERVICE_NAME:-nk3-peer-pinner}"
 
 if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
@@ -56,12 +57,87 @@ install_pkg() {
   exit 1
 }
 
-if [[ ! -d "$REPO_DIR/.git" ]]; then
-  echo "missing repo at $REPO_DIR"
-  echo "run installer first:"
-  echo "curl -fsSL https://raw.githubusercontent.com/Aux0x7F/NK3Mixtape/main/scripts/install-peer-pinner.sh | bash"
-  exit 1
-fi
+is_git_repo() {
+  local dir="$1"
+  [[ -n "$dir" && -d "$dir/.git" ]]
+}
+
+service_workdir() {
+  local file="/etc/systemd/system/${SERVICE_NAME}.service"
+  if [[ ! -f "$file" ]]; then
+    return 0
+  fi
+  sed -n 's/^WorkingDirectory=//p' "$file" | head -n1
+}
+
+detect_legacy_repo() {
+  local -a candidates=()
+  local svc_wd=""
+  svc_wd="$(service_workdir || true)"
+
+  candidates+=("$TARGET_DIR")
+  candidates+=("$HOME/NK3Mixtape")
+  candidates+=("/root/NK3Mixtape")
+  candidates+=("/opt/NK3Mixtape")
+  if [[ -n "$svc_wd" ]]; then
+    candidates+=("$(dirname "$svc_wd")")
+  fi
+  for p in /home/*/NK3Mixtape; do
+    candidates+=("$p")
+  done
+
+  local seen=""
+  local c=""
+  for c in "${candidates[@]}"; do
+    [[ -n "$c" ]] || continue
+    [[ "$seen" == *"|$c|"* ]] && continue
+    seen="${seen}|$c|"
+    if is_git_repo "$c"; then
+      echo "$c"
+      return 0
+    fi
+  done
+  return 1
+}
+
+prepare_target_dir() {
+  if [[ -e "$TARGET_DIR" && ! -d "$TARGET_DIR/.git" ]]; then
+    if [[ -n "$(ls -A "$TARGET_DIR" 2>/dev/null || true)" ]]; then
+      local backup="${TARGET_DIR}.backup.$(date +%s)"
+      run_as_root mv "$TARGET_DIR" "$backup"
+      echo "moved conflicting target to $backup"
+    else
+      run_as_root rm -rf "$TARGET_DIR"
+    fi
+  fi
+  run_as_root mkdir -p "$(dirname "$TARGET_DIR")"
+  if [[ ! -e "$TARGET_DIR" ]]; then
+    run_as_root mkdir -p "$TARGET_DIR"
+  fi
+  run_as_root chown -R "$ACTOR_USER:$ACTOR_GROUP" "$TARGET_DIR"
+}
+
+migrate_legacy_repo_if_needed() {
+  if is_git_repo "$TARGET_DIR"; then
+    return 0
+  fi
+  local legacy=""
+  legacy="$(detect_legacy_repo || true)"
+  if [[ -z "$legacy" || "$legacy" == "$TARGET_DIR" ]]; then
+    return 0
+  fi
+
+  echo "found legacy repo at $legacy"
+  echo "migrating to $TARGET_DIR"
+  run_as_root rm -rf "$TARGET_DIR"
+  run_as_root mkdir -p "$(dirname "$TARGET_DIR")"
+  if command -v rsync >/dev/null 2>&1; then
+    run_as_root rsync -a --delete "$legacy/" "$TARGET_DIR/"
+  else
+    run_as_root cp -a "$legacy" "$TARGET_DIR"
+  fi
+  run_as_root chown -R "$ACTOR_USER:$ACTOR_GROUP" "$TARGET_DIR"
+}
 
 if ! command -v git >/dev/null 2>&1; then
   install_pkg git
@@ -73,19 +149,36 @@ if ! command -v node >/dev/null 2>&1; then
   install_pkg nodejs
 fi
 
-run_as_root chown -R "$ACTOR_USER:$ACTOR_GROUP" "$REPO_DIR"
+prepare_target_dir
+migrate_legacy_repo_if_needed
 
-run_as_actor git -C "$REPO_DIR" fetch origin "$BRANCH" --depth=1
-run_as_actor git -C "$REPO_DIR" checkout "$BRANCH"
-run_as_actor git -C "$REPO_DIR" pull --ff-only origin "$BRANCH"
-run_as_actor npm --prefix "$REPO_DIR/peer-pinner" install --omit=dev
+fresh_install=0
+if is_git_repo "$TARGET_DIR"; then
+  run_as_actor git -C "$TARGET_DIR" fetch origin "$BRANCH" --depth=1
+  run_as_actor git -C "$TARGET_DIR" checkout "$BRANCH"
+  run_as_actor git -C "$TARGET_DIR" pull --ff-only origin "$BRANCH"
+else
+  run_as_root rm -rf "$TARGET_DIR"
+  run_as_root mkdir -p "$(dirname "$TARGET_DIR")"
+  run_as_actor git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$TARGET_DIR"
+  fresh_install=1
+fi
 
-run_as_root systemctl daemon-reload
-run_as_root systemctl restart "$SERVICE_NAME"
+run_as_actor npm --prefix "$TARGET_DIR/peer-pinner" install --omit=dev
+
+run_as_root env \
+  PINNER_USER="$ACTOR_USER" \
+  PINNER_GROUP="$ACTOR_GROUP" \
+  SERVICE_NAME="$SERVICE_NAME" \
+  bash "$TARGET_DIR/scripts/setup-peer-pinner.sh"
 
 echo
-echo "updated"
-echo "repo: $REPO_DIR"
+if [[ "$fresh_install" -eq 1 ]]; then
+  echo "installed"
+else
+  echo "updated"
+fi
+echo "repo: $TARGET_DIR"
 echo "service: sudo systemctl status $SERVICE_NAME --no-pager"
 if command -v curl >/dev/null 2>&1; then
   echo "healthz: $(curl -fsS http://127.0.0.1:4848/healthz || echo unavailable)"
