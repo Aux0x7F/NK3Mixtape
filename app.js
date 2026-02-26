@@ -29,6 +29,44 @@ const DEFAULT_SNAPSHOT = [
   { entry_id: "seed:no-kings:3", title: "Alright", artist: "Kendrick Lamar", user: "seed", created_at: 1710000200 },
 ];
 
+const SONG_TITLE_STOP_WORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "audio",
+  "clean",
+  "edit",
+  "explicit",
+  "feat",
+  "featuring",
+  "ft",
+  "hd",
+  "hq",
+  "live",
+  "lyric",
+  "lyrics",
+  "mix",
+  "official",
+  "remix",
+  "the",
+  "version",
+  "video",
+  "visualizer",
+  "with",
+]);
+
+const SONG_ARTIST_STOP_WORDS = new Set([
+  "a",
+  "and",
+  "feat",
+  "featuring",
+  "ft",
+  "the",
+  "vs",
+  "with",
+  "x",
+]);
+
 const STORAGE_SESSION = "nk3.session.v2";
 const STORAGE_IDENTITY_LEGACY = "nk3.identity.v1";
 const STORAGE_LAST_NAME = "nk3.name.v1";
@@ -94,6 +132,10 @@ const state = {
 };
 
 let renderQueued = false;
+let liveSub = null;
+let liveSeq = 0;
+let liveReconnectTimer = 0;
+let liveReconnectAttempt = 0;
 
 const el = {
   appMain: document.getElementById("appMain"),
@@ -160,6 +202,7 @@ const el = {
   youtubeInput: document.getElementById("youtubeInput"),
   ytPlayerHost: document.getElementById("ytPlayerHost"),
   list: document.getElementById("list"),
+  toastStack: document.getElementById("toastStack"),
 };
 
 void init();
@@ -670,6 +713,32 @@ function persistSession() {
 }
 
 function connect() {
+  window.addEventListener("online", () => {
+    scheduleLiveReconnect(300, "online");
+  });
+  window.addEventListener("offline", () => {
+    setStatus("offline");
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && !liveSub) {
+      scheduleLiveReconnect(200, "visible");
+    }
+  });
+  startLiveSync("init");
+}
+
+function startLiveSync(reason) {
+  if (liveReconnectTimer) {
+    clearTimeout(liveReconnectTimer);
+    liveReconnectTimer = 0;
+  }
+  const seq = ++liveSeq;
+  if (liveSub && typeof liveSub.close === "function") {
+    const stale = liveSub;
+    liveSub = null;
+    Promise.resolve(stale.close(`restart:${reason}`)).catch(() => {});
+  }
+
   const filter = {
     kinds: [
       APP.kinds.adminClaim,
@@ -686,12 +755,16 @@ function connect() {
     "#t": [APP.tag],
     limit: 5000,
   };
+  state.synced = false;
   setStatus(`syncing ${APP.relays.length} relays...`);
-  pool.subscribeMany(APP.relays, filter, {
+  liveSub = pool.subscribeMany(APP.relays, filter, {
     onevent: (ev) => {
+      if (seq !== liveSeq) return;
       if (ingestEvent(ev)) queueRender();
     },
     oneose: () => {
+      if (seq !== liveSeq) return;
+      liveReconnectAttempt = 0;
       state.synced = true;
       setStatus(`synced ${state.seen.size} events${hasAdmin() ? ` admin ${shortPk(state.admin.pubkey)}` : " no admin"}`);
       renderIdentity();
@@ -699,10 +772,34 @@ function connect() {
       renderList();
     },
     onclose: (reasons) => {
+      if (seq !== liveSeq) return;
+      liveSub = null;
+      state.synced = false;
       const closed = reasons.filter(Boolean).length;
-      if (closed > 0 && !state.synced) setStatus(`relay close ${closed}/${APP.relays.length}`);
+      const delay = nextLiveReconnectDelayMs();
+      if (closed > 0) {
+        setStatus(`relay close ${closed}/${APP.relays.length}; reconnecting in ${Math.ceil(delay / 1000)}s`);
+      }
+      scheduleLiveReconnect(delay, "close");
     },
   });
+}
+
+function nextLiveReconnectDelayMs() {
+  const exp = Math.min(liveReconnectAttempt, 6);
+  const base = 1000 * (2 ** exp);
+  liveReconnectAttempt += 1;
+  const jitter = Math.floor(Math.random() * 500);
+  return Math.min(20000, base + jitter);
+}
+
+function scheduleLiveReconnect(delayMs, reason) {
+  const delay = Math.max(150, Number(delayMs) || 0);
+  if (liveReconnectTimer) clearTimeout(liveReconnectTimer);
+  liveReconnectTimer = window.setTimeout(() => {
+    liveReconnectTimer = 0;
+    startLiveSync(reason || "retry");
+  }, delay);
 }
 
 function ingestEvent(ev, { persist = true } = {}) {
@@ -1184,7 +1281,7 @@ function renderList() {
   for (const row of rows) el.list.appendChild(renderRow(row));
 }
 
-function buildRows() {
+function buildRows({ includeHiddenRevoked = false } = {}) {
   const merged = new Map();
   for (const e of (state.snapshot ? state.snapshot.entries : DEFAULT_SNAPSHOT.map((x) => ({ ...x })))) merged.set(e.entry_id, e);
   for (const e of state.entries.values()) merged.set(e.entry_id, e);
@@ -1196,7 +1293,7 @@ function buildRows() {
     const revoked = state.mods.get(e.entry_id)?.action === "revoke";
     const ownerCanSee = Boolean(state.identity && owner_pubkey && owner_pubkey === state.identity.pubkey);
     const adminCanSee = isAdminMe() && state.showRevoked;
-    if (revoked && !(adminCanSee || ownerCanSee)) continue;
+    if (revoked && !adminCanSee && !includeHiddenRevoked) continue;
     if (ownerBanned && !(adminCanSee || ownerCanSee)) continue;
     const map = state.votes.get(e.entry_id) || new Map();
     let score = 0;
@@ -1226,6 +1323,8 @@ function buildRows() {
 function renderRow(r) {
   const item = document.createElement("article");
   item.className = r.revoked ? "item revoked" : "item";
+  item.id = entryDomId(r.entry_id);
+  item.dataset.entryId = r.entry_id;
 
   const main = document.createElement("div");
   main.className = "item-main";
@@ -1236,9 +1335,15 @@ function renderRow(r) {
   const metaLine = document.createElement("div");
   metaLine.className = "meta-line";
 
-  const title = document.createElement("span");
-  title.className = "title";
+  const songUrl = cleanText(r.youtube_url || (r.youtube_id ? canonicalYouTubeUrl(r.youtube_id) : ""), 300);
+  const title = songUrl ? document.createElement("a") : document.createElement("span");
+  title.className = songUrl ? "title title-link" : "title";
   title.textContent = r.title;
+  if (songUrl) {
+    title.href = songUrl;
+    title.target = "_blank";
+    title.rel = "noopener noreferrer";
+  }
   const artist = document.createElement("span");
   artist.className = "artist";
   artist.textContent = r.artist;
@@ -1250,12 +1355,6 @@ function renderRow(r) {
   if (r.owner_pubkey) {
     author.classList.add("clickable");
     author.addEventListener("click", () => openUserModal(r.owner_pubkey, resolvedName, r));
-    item.classList.add("item-clickable");
-    item.addEventListener("click", (event) => {
-      if (!(event.target instanceof Element)) return;
-      if (event.target.closest("button")) return;
-      openUserModal(r.owner_pubkey, resolvedName, r);
-    });
   } else {
     author.disabled = true;
   }
@@ -1275,6 +1374,12 @@ function renderRow(r) {
   titleLine.prepend(title);
   artistLine.appendChild(artist);
   metaLine.append(author);
+  if (r.revoked) {
+    const deleted = document.createElement("span");
+    deleted.className = "item-state deleted";
+    deleted.textContent = "deleted";
+    metaLine.append(deleted);
+  }
   const canEdit = Boolean(state.identity && canPubkeyModerateEntry(state.identity.pubkey, r.entry_id));
   if (canEdit) {
     const edit = document.createElement("button");
@@ -1410,6 +1515,32 @@ async function onEntrySubmit(e) {
     youtubeEl: el.youtubeInput,
   });
   if (!fields) return;
+  const duplicate = findDuplicateEntry(fields, { includeHiddenRevoked: true });
+  if (duplicate) {
+    const isDeletedMatch = duplicate.reason === "deleted_youtube" || duplicate.reason === "deleted_fuzzy";
+    const scrolled = scrollToEntry(duplicate.entry_id);
+    clearEntryDraft();
+    if (isDeletedMatch) {
+      const msg = `This song has been previously declined. ${duplicate.title} - ${duplicate.artist}`;
+      showToast(msg, { kind: "warn", timeoutMs: 4200 });
+      setStatus(`${msg}${scrolled ? " matched deleted entry" : ""}`);
+    } else if (duplicate.reason === "youtube") {
+      closeModal(el.addSongModal);
+      const msg = scrolled
+        ? `Song already exists. Scrolling you to it.`
+        : `Song already exists.`;
+      showToast(msg, { kind: "info", timeoutMs: 3200 });
+      setStatus(`${msg} (${duplicate.title} - ${duplicate.artist})`);
+    } else {
+      closeModal(el.addSongModal);
+      const msg = scrolled
+        ? `Song already exists. Scrolling you to it.`
+        : `Song already exists.`;
+      showToast(msg, { kind: "info", timeoutMs: 3200 });
+      setStatus(`${msg} (${duplicate.title} - ${duplicate.artist})`);
+    }
+    return;
+  }
 
   const created_at = nowSec();
   const entry_id = `entry:${state.identity.pubkey.slice(0, 8)}:${Date.now().toString(36)}`;
@@ -1424,12 +1555,16 @@ async function onEntrySubmit(e) {
     created_at,
   });
   if (ok < 0) return;
-  el.titleInput.value = "";
-  el.artistInput.value = "";
-  el.youtubeInput.value = "";
+  clearEntryDraft();
   closeModal(el.addSongModal);
   renderList();
   setStatus(`published ${ok}/${APP.relays.length}`);
+}
+
+function clearEntryDraft() {
+  if (el.titleInput) el.titleInput.value = "";
+  if (el.artistInput) el.artistInput.value = "";
+  if (el.youtubeInput) el.youtubeInput.value = "";
 }
 
 function openEditModal(row) {
@@ -1523,6 +1658,190 @@ function parseEntryFields(titleRaw, artistRaw, youtubeRawInput, { titleEl, artis
   }
 
   return { title, artist, youtube_id, youtube_url };
+}
+
+function findDuplicateEntry(fields, { includeHiddenRevoked = false } = {}) {
+  if (!fields || typeof fields !== "object") return null;
+  const rows = buildRows({ includeHiddenRevoked });
+  const youtube_id = cleanYouTubeId(fields.youtube_id || "");
+  const title = cleanText(fields.title || "", 120);
+  const artist = cleanText(fields.artist || "", 120);
+  if (!title || !artist) return null;
+
+  let bestActive = null;
+  let bestDeleted = null;
+  for (const row of rows) {
+    if (!row) continue;
+    const isDeleted = Boolean(row.revoked);
+    if (youtube_id && row.youtube_id && youtube_id === row.youtube_id) {
+      if (!isDeleted) return { ...row, reason: "youtube" };
+      bestDeleted = { ...row, reason: "deleted_youtube", score: 2 };
+      continue;
+    }
+    const sim = songSimilarity({ title, artist }, row);
+    if (!sim.match) continue;
+    const hit = { ...row, reason: isDeleted ? "deleted_fuzzy" : "fuzzy", score: sim.score };
+    if (!isDeleted) {
+      if (!bestActive || sim.score > bestActive.score) bestActive = hit;
+    } else if (!bestDeleted || sim.score > bestDeleted.score) {
+      bestDeleted = hit;
+    }
+  }
+  return bestActive || bestDeleted;
+}
+
+function songSimilarity(a, b) {
+  const aTitle = songNorm(a?.title || "");
+  const bTitle = songNorm(b?.title || "");
+  const aArtist = songNorm(a?.artist || "");
+  const bArtist = songNorm(b?.artist || "");
+
+  const titleCov = tokenCoverage(songTokens(aTitle, "title"), songTokens(bTitle, "title"));
+  const artistCov = tokenCoverage(songTokens(aArtist, "artist"), songTokens(bArtist, "artist"));
+  const tightTitleA = tightSongTitle(aTitle);
+  const tightTitleB = tightSongTitle(bTitle);
+  const tightArtistA = tightSongArtist(aArtist);
+  const tightArtistB = tightSongArtist(bArtist);
+  const titleContains =
+    tightTitleA.length >= 6
+    && tightTitleB.length >= 6
+    && (tightTitleA.includes(tightTitleB) || tightTitleB.includes(tightTitleA));
+  const artistContains =
+    tightArtistA.length >= 4
+    && tightArtistB.length >= 4
+    && (tightArtistA.includes(tightArtistB) || tightArtistB.includes(tightArtistA));
+  const titleTypo = normalizedStringSimilarity(tightTitleA, tightTitleB);
+  const artistTypo = normalizedStringSimilarity(tightArtistA, tightArtistB);
+
+  const titleMatch = titleCov >= 0.7 || titleContains || titleTypo >= 0.86;
+  const artistMatch = artistCov >= 0.62 || artistContains || artistTypo >= 0.84;
+  const titleScore = Math.max(titleCov, titleTypo);
+  const artistScore = Math.max(artistCov, artistTypo);
+  const score = Number((titleScore * 0.58 + artistScore * 0.42).toFixed(3));
+  const match = titleMatch && artistMatch;
+
+  return { match, score, titleCov, artistCov, titleTypo, artistTypo };
+}
+
+function songNorm(value) {
+  return String(value || "")
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\[[^\]]*]/g, " ")
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/\s+[-|:]\s+/g, " ")
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function tightSongTitle(value) {
+  return songNorm(value)
+    .replace(/\b(feat|ft|featuring)\b.*$/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function tightSongArtist(value) {
+  return songNorm(value)
+    .replace(/\b(feat|ft|featuring|with|and|vs|x)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function songTokens(value, mode) {
+  const raw = String(value || "").trim();
+  if (!raw) return new Set();
+  const stop = mode === "title" ? SONG_TITLE_STOP_WORDS : SONG_ARTIST_STOP_WORDS;
+  const out = new Set();
+  for (const token of raw.split(/\s+/)) {
+    const t = String(token || "").trim();
+    if (!t || t.length <= 1 || stop.has(t)) continue;
+    out.add(t);
+  }
+  return out;
+}
+
+function tokenCoverage(a, b) {
+  if (!a?.size || !b?.size) return 0;
+  let hit = 0;
+  for (const x of a.values()) {
+    if (b.has(x)) hit += 1;
+  }
+  return hit / Math.min(a.size, b.size);
+}
+
+function normalizedStringSimilarity(a, b) {
+  const x = String(a || "").replace(/\s+/g, " ").trim();
+  const y = String(b || "").replace(/\s+/g, " ").trim();
+  if (!x || !y) return 0;
+  if (x === y) return 1;
+  const maxLen = Math.max(x.length, y.length);
+  if (maxLen === 0) return 1;
+  const d = levenshteinDistance(x, y);
+  return Math.max(0, 1 - d / maxLen);
+}
+
+function levenshteinDistance(a, b) {
+  const n = a.length;
+  const m = b.length;
+  if (n === 0) return m;
+  if (m === 0) return n;
+
+  let prev = new Array(m + 1);
+  let curr = new Array(m + 1);
+  for (let j = 0; j <= m; j += 1) prev[j] = j;
+
+  for (let i = 1; i <= n; i += 1) {
+    curr[0] = i;
+    const ai = a.charCodeAt(i - 1);
+    for (let j = 1; j <= m; j += 1) {
+      const cost = ai === b.charCodeAt(j - 1) ? 0 : 1;
+      const del = prev[j] + 1;
+      const ins = curr[j - 1] + 1;
+      const sub = prev[j - 1] + cost;
+      curr[j] = Math.min(del, ins, sub);
+    }
+    const tmp = prev;
+    prev = curr;
+    curr = tmp;
+  }
+  return prev[m];
+}
+
+function entryDomId(entry_id) {
+  const clean = cleanEntryId(entry_id) || "song";
+  const slug = clean.replace(/[^a-z0-9_-]+/g, "_").slice(0, 56);
+  return `entry-${slug}-${hash32(clean)}`;
+}
+
+function hash32(input) {
+  let h = 2166136261;
+  for (let i = 0; i < input.length; i += 1) {
+    h ^= input.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0).toString(36);
+}
+
+function scrollToEntry(entry_id) {
+  const id = entryDomId(entry_id);
+  let node = document.getElementById(id);
+  if (!node) {
+    renderList();
+    node = document.getElementById(id);
+  }
+  if (!node) return false;
+
+  node.scrollIntoView({ behavior: "smooth", block: "center" });
+  node.classList.remove("item-highlight");
+  void node.offsetWidth;
+  node.classList.add("item-highlight");
+  window.setTimeout(() => {
+    node?.classList.remove("item-highlight");
+  }, 3000);
+  return true;
 }
 
 async function publishEntryEvent({ entry_id, title, artist, youtube_id, youtube_url, user, owner_pubkey, created_at }) {
@@ -2438,6 +2757,31 @@ function clampVote(v) {
 
 function nowSec() {
   return Math.floor(Date.now() / 1000);
+}
+
+function showToast(message, { kind = "info", timeoutMs = 3200 } = {}) {
+  const text = cleanText(message, 240);
+  if (!text) return;
+  const host = el.toastStack;
+  if (!host) {
+    console.log(`[nk3:toast] ${text}`);
+    return;
+  }
+  const toast = document.createElement("div");
+  toast.className = `toast ${kind === "warn" ? "warn" : "info"}`;
+  toast.textContent = text;
+  host.appendChild(toast);
+  requestAnimationFrame(() => {
+    toast.classList.add("show");
+  });
+  const ttl = Math.max(1400, Number(timeoutMs) || 0);
+  window.setTimeout(() => {
+    toast.classList.remove("show");
+    toast.classList.add("hide");
+    window.setTimeout(() => {
+      toast.remove();
+    }, 220);
+  }, ttl);
 }
 
 function setStatus(text) {
