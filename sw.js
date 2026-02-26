@@ -1,4 +1,4 @@
-const CACHE_NAME = "nk3-shell-v15";
+const CACHE_NAME = "nk3-shell-v16";
 const APP_SHELL = [
   "./",
   "./index.html",

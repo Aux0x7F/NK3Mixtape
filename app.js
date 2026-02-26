@@ -61,6 +61,7 @@ const state = {
   showRevoked: false,
   usernames: new Map(),
   entries: new Map(),
+  entryOwners: new Map(),
   votes: new Map(),
   admin: { pubkey: normPk(APP.bootstrapAdminPubkey), claimEvent: null },
   admins: new Set(),
@@ -921,11 +922,18 @@ function applyEntry(ev) {
   if (!entry_id || !title || !artist) return false;
   if (user) rememberName(signer, user, ev.created_at);
 
-  const existingOwner = ownerPubkeyForEntry(entry_id);
-  const owner_pubkey = existingOwner || signer;
+  const claimedOwner = normPk(p.owner_pubkey || firstTag(ev, "p"));
+  const ownerCandidate = isHex64(claimedOwner) ? claimedOwner : signer;
+  const ownerNameCandidate = normName(p.owner_name || "") || user || resolveName(ownerCandidate);
+  const owner = rememberEntryOwner(entry_id, ownerCandidate, ownerNameCandidate, created_at, ev.id);
+  const owner_pubkey = owner?.pubkey || ownerCandidate;
+  const owner_name = owner?.user || user || resolveName(owner_pubkey);
+
   const cur = state.entries.get(entry_id);
   if (cur && (cur.event_created_at > ev.created_at || (cur.event_created_at === ev.created_at && (cur.event_id || "") >= ev.id))) {
-    return false;
+    if (cur.pubkey === owner_pubkey && cur.user === owner_name) return false;
+    state.entries.set(entry_id, { ...cur, pubkey: owner_pubkey, user: owner_name });
+    return true;
   }
   state.entries.set(entry_id, {
     entry_id,
@@ -933,7 +941,7 @@ function applyEntry(ev) {
     artist,
     youtube_id,
     youtube_url,
-    user: user || resolveName(owner_pubkey),
+    user: owner_name,
     created_at,
     pubkey: owner_pubkey,
     event_created_at: ev.created_at,
@@ -1080,7 +1088,12 @@ function applySnapshot(ev) {
     const e = normEntry(raw);
     if (e) dedupe.set(e.entry_id, e);
   }
-  for (const e of dedupe.values()) entries.push(e);
+  for (const e of dedupe.values()) {
+    entries.push(e);
+    if (isHex64(normPk(e.pubkey || ""))) {
+      rememberEntryOwner(e.entry_id, normPk(e.pubkey), normName(e.user || ""), e.created_at, ev.id);
+    }
+  }
   state.snapshotEvents.push({ ev, version_ts, admin_pubkey, entries });
   return recomputeSnapshotChoice();
 }
@@ -1426,7 +1439,12 @@ function openEditModal(row) {
   if (!canPubkeyModerateEntry(state.identity.pubkey, entry_id)) return setStatus("not allowed");
 
   const owner_pubkey = normPk(row?.owner_pubkey || ownerPubkeyForEntry(entry_id));
-  const owner_name = normName(row?.user || (owner_pubkey ? resolveName(owner_pubkey) : "")) || state.identity.name;
+  const owner_name = normName(
+    state.entryOwners.get(entry_id)?.user
+      || (owner_pubkey ? resolveName(owner_pubkey) : "")
+      || row?.user
+      || "",
+  ) || state.identity.name;
   const created_at = unixOr(row?.created_at, nowSec());
   const youtube = cleanText(row?.youtube_url || (row?.youtube_id ? canonicalYouTubeUrl(row.youtube_id) : ""), 300);
 
@@ -1508,17 +1526,21 @@ function parseEntryFields(titleRaw, artistRaw, youtubeRawInput, { titleEl, artis
 }
 
 async function publishEntryEvent({ entry_id, title, artist, youtube_id, youtube_url, user, owner_pubkey, created_at }) {
+  const ownerPk = normPk(owner_pubkey || "");
+  const ownerName = normName(user);
   const payload = {
     entry_id,
     title,
     artist,
     youtube_id,
     youtube_url,
-    user: normName(user),
-    owner_pubkey: normPk(owner_pubkey || ""),
+    user: ownerName,
+    owner_name: ownerName,
+    owner_pubkey: ownerPk,
     created_at: unixOr(created_at, nowSec()),
   };
   const tags = [["d", entry_id]];
+  if (isHex64(ownerPk)) tags.push(["p", ownerPk]);
   if (payload.youtube_id) tags.push(["yt", payload.youtube_id]);
   const ev = await signEvent(APP.kinds.entry, tags, payload);
   if (!ev) return -1;
@@ -2286,6 +2308,48 @@ function rememberName(pubkey, name, created_at) {
   if (!cur || cur.created_at <= created_at) state.usernames.set(pubkey, { name: clean, created_at });
 }
 
+function rememberEntryOwner(entry_id, owner_pubkey, owner_name, created_at, event_id) {
+  const id = cleanEntryId(entry_id);
+  const pubkey = normPk(owner_pubkey || "");
+  if (!id || !isHex64(pubkey)) return null;
+
+  const next = {
+    pubkey,
+    user: normName(owner_name || ""),
+    created_at: unixOr(created_at, nowSec()),
+    id: String(event_id || ""),
+  };
+
+  const cur = state.entryOwners.get(id);
+  if (!cur) {
+    state.entryOwners.set(id, next);
+    return next;
+  }
+
+  const isEarlier =
+    next.created_at < cur.created_at
+    || (next.created_at === cur.created_at && next.id && cur.id && next.id.localeCompare(cur.id) < 0);
+
+  if (isEarlier) {
+    const merged = {
+      pubkey: next.pubkey,
+      user: next.user || cur.user,
+      created_at: next.created_at,
+      id: next.id || cur.id,
+    };
+    state.entryOwners.set(id, merged);
+    return merged;
+  }
+
+  if (!cur.user && next.user) {
+    const merged = { ...cur, user: next.user };
+    state.entryOwners.set(id, merged);
+    return merged;
+  }
+
+  return cur;
+}
+
 function uniqNames(list) {
   const seen = new Set();
   const out = [];
@@ -2499,6 +2563,10 @@ function canPubkeyModerateEntry(pubkey, entry_id) {
 }
 
 function ownerPubkeyForEntry(entry_id) {
+  const owned = state.entryOwners.get(cleanEntryId(entry_id));
+  if (owned && isHex64(normPk(owned.pubkey || ""))) {
+    return normPk(owned.pubkey);
+  }
   const live = state.entries.get(entry_id);
   if (live && isHex64(normPk(live.pubkey || ""))) {
     return normPk(live.pubkey);
