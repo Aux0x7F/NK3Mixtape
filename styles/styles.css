@@ -57,6 +57,7 @@
   --app-top-offset-mobile: 0.72rem;
   --mini-player-clearance: 6.95rem;
   --mini-player-clearance-mobile: 4.95rem;
+  --mini-player-runtime-height: var(--mini-player-clearance);
   --shell-surface:
     linear-gradient(165deg, rgba(255, 246, 222, 0.95), rgba(255, 237, 206, 0.92)),
     var(--panel);
@@ -285,14 +286,14 @@ body.compat-blocked #toastStack {
   --app-bottom-clearance: 1rem;
   width: min(980px, 92vw);
   position: fixed;
-  left: 50%;
+  left: 0;
+  right: 0;
   top: var(--app-top-offset);
   bottom: var(--app-bottom-clearance);
-  transform: translateX(-50%);
+  margin-inline: auto;
   display: flex;
   flex-direction: column;
   min-height: 0;
-  isolation: isolate;
   background: transparent;
 }
 
@@ -409,18 +410,58 @@ body.compat-blocked #toastStack {
   border-radius: 0.8rem;
   border-color: rgba(134, 101, 62, 0.64);
   background: rgba(255, 247, 230, 0.74);
+  overflow: hidden;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease,
+    transform 120ms ease;
 }
 
-#menuBtn::before {
+#menuBtn::before,
+#menuBtn::after,
+#menuBtn .menu-glyph {
   content: "";
   position: absolute;
   left: 0.62rem;
   right: 0.62rem;
-  top: 0.64rem;
   height: 2px;
   background: currentColor;
   border-radius: 999px;
-  box-shadow: 0 0.36rem 0 currentColor, 0 0.72rem 0 currentColor;
+  transform-origin: center;
+  transition: top 180ms ease, transform 180ms ease, opacity 140ms ease;
+}
+
+#menuBtn::before {
+  top: 0.64rem;
+}
+
+#menuBtn .menu-glyph {
+  top: calc(50% - 1px);
+}
+
+#menuBtn::after {
+  top: calc(100% - 0.64rem - 2px);
+}
+
+body.menu-modal-open #menuBtn::before {
+  top: calc(50% - 1px);
+  transform: rotate(45deg);
+}
+
+body.menu-modal-open #menuBtn::after {
+  top: calc(50% - 1px);
+  transform: rotate(-45deg);
+}
+
+body.menu-modal-open #menuBtn .menu-glyph {
+  opacity: 0;
+  transform: scaleX(0.45);
+}
+
+body.menu-modal-open #menuBtn {
+  opacity: 0;
+  pointer-events: none;
 }
 
 #menuBtn:hover,
@@ -613,11 +654,11 @@ button:active {
 .list {
   display: grid;
   flex: 1 1 auto;
-  width: 100vw;
-  max-width: none;
-  align-self: center;
-  margin-left: calc(50% - 50vw);
-  margin-right: calc(50% - 50vw);
+  width: 100%;
+  max-width: 100%;
+  align-self: stretch;
+  margin-left: 0;
+  margin-right: 0;
   gap: 0;
   min-height: 0;
   overflow-y: auto;
@@ -626,7 +667,8 @@ button:active {
   -ms-overflow-style: none;
   margin-top: 0;
   padding-top: 0;
-  padding-bottom: max(var(--list-gap), calc(var(--app-bottom-clearance) - 1rem));
+  padding-bottom: var(--list-gap);
+  scroll-padding-bottom: calc(var(--list-gap) + 0.4rem);
   background-color: var(--panel);
   background-image:
     repeating-linear-gradient(102deg, rgba(92, 71, 50, 0.032) 0 1px, transparent 1px 18px),
@@ -1098,42 +1140,48 @@ button:active {
 }
 
 .modal {
+  --modal-bottom-clearance: 0px;
+  --modal-close-top: calc(var(--app-top-offset) + 0.38rem);
+  --modal-close-right: max(0.9rem, calc((100vw - min(980px, 92vw)) / 2 + 0.5rem));
+  --modal-inline-pad: max(1rem, calc((100vw - min(980px, 92vw)) / 2 + 0.5rem));
+  --modal-content-width: min(32rem, calc(100vw - 2rem));
   position: fixed;
-  inset: 0;
-  background: rgba(36, 20, 12, 0.48);
+  inset: 0 0 var(--modal-bottom-clearance) 0;
+  background: var(--shell-surface);
   display: grid;
-  place-items: center;
-  z-index: 40;
-  padding: 1rem;
-  overflow-y: auto;
+  place-items: stretch;
+  z-index: 140;
+  padding: 0;
+  overflow: hidden;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
 }
 
 .modal-card {
-  --modal-close-top: 0.9rem;
-  --modal-close-right: 0.9rem;
-  width: min(32rem, 94vw);
-  max-height: calc(100dvh - 2rem);
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 0.9rem;
-  box-shadow: 0 20px 48px -22px var(--shadow);
+  width: 100vw;
+  max-width: none;
+  max-height: 100%;
+  min-height: 100%;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
   position: relative;
-  padding: 0.9rem;
+  padding:
+    calc(var(--app-top-offset) + 0.38rem)
+    var(--modal-inline-pad)
+    1rem
+    var(--modal-inline-pad);
   display: grid;
   gap: 0.6rem;
+  justify-items: center;
   align-content: center;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
 
-@supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
-  .modal-card {
-    background: rgba(255, 255, 255, 0.5);
-    -webkit-backdrop-filter: blur(16px) saturate(1.02);
-    backdrop-filter: blur(16px) saturate(1.02);
-  }
+body.mini-player-visible .modal {
+  --modal-bottom-clearance: var(--mini-player-runtime-height);
 }
 
 #menuModal .modal-card > :not(.modal-close),
@@ -1142,7 +1190,9 @@ button:active {
 .modal-card > section,
 .modal-card > a,
 .modal-card > p {
-  width: 100%;
+  width: min(100%, var(--modal-content-width));
+  max-width: 100%;
+  margin-inline: auto;
 }
 
 #menuModal .modal-card > button:not(.modal-close) {
@@ -1168,6 +1218,58 @@ button:active {
   border-radius: 0.8rem;
   border-color: rgba(134, 101, 62, 0.64);
   background: rgba(255, 247, 230, 0.74);
+  z-index: 2;
+}
+
+#menuModal .menu-modal-close {
+  width: 2.6rem;
+  height: 2.35rem;
+  z-index: 180;
+}
+
+#menuModal .menu-modal-close::before,
+#menuModal .menu-modal-close::after,
+#menuModal .menu-modal-close .menu-glyph {
+  content: "";
+  position: absolute;
+  left: 0.62rem;
+  right: 0.62rem;
+  height: 2px;
+  background: currentColor;
+  border-radius: 999px;
+  transform-origin: center;
+  transition: top 180ms ease, transform 180ms ease, opacity 140ms ease;
+}
+
+#menuModal .menu-modal-close::before {
+  top: 0.64rem;
+  transform: rotate(0deg);
+}
+
+#menuModal .menu-modal-close .menu-glyph {
+  top: calc(50% - 1px);
+  opacity: 1;
+  transform: scaleX(1);
+}
+
+#menuModal .menu-modal-close::after {
+  top: calc(100% - 0.64rem - 2px);
+  transform: rotate(0deg);
+}
+
+body.menu-modal-open.menu-modal-morph-ready #menuModal .menu-modal-close::before {
+  top: calc(50% - 1px);
+  transform: rotate(45deg);
+}
+
+body.menu-modal-open.menu-modal-morph-ready #menuModal .menu-modal-close::after {
+  top: calc(50% - 1px);
+  transform: rotate(-45deg);
+}
+
+body.menu-modal-open.menu-modal-morph-ready #menuModal .menu-modal-close .menu-glyph {
+  opacity: 0;
+  transform: scaleX(0.45);
 }
 
 .modal-close::before,
@@ -1329,9 +1431,12 @@ button:active {
   --swipe-right-progress: 0;
   --swipe-left-progress: 0;
   position: fixed;
-  left: 0;
-  right: 0;
+  width: min(980px, 92vw);
+  max-width: 100vw;
+  left: 50%;
+  right: auto;
   bottom: 0;
+  transform: translateX(-50%);
   z-index: 110;
   border-radius: 0;
   background: transparent;
@@ -1657,11 +1762,11 @@ button:active {
 }
 
 .mini-player-visible .app {
-  --app-bottom-clearance: var(--mini-player-clearance);
+  --app-bottom-clearance: var(--mini-player-runtime-height);
 }
 
 .mini-player-visible .toast-stack {
-  bottom: 7rem;
+  bottom: calc(var(--mini-player-runtime-height) + 0.5rem);
 }
 
 .toast {
@@ -1756,6 +1861,11 @@ button:active {
   }
 
   .list {
+    width: 100vw;
+    max-width: none;
+    align-self: center;
+    margin-left: calc(50% - 50vw);
+    margin-right: calc(50% - 50vw);
     gap: 0;
   }
 
@@ -1837,7 +1947,7 @@ button:active {
   }
 
   body.mini-player-visible .modal {
-    --modal-bottom-clearance: calc(var(--mini-player-clearance-mobile) + env(safe-area-inset-bottom));
+    --modal-bottom-clearance: calc(var(--mini-player-runtime-height) + env(safe-area-inset-bottom));
   }
 
   .modal-card {
@@ -1873,11 +1983,18 @@ button:active {
     height: 2.35rem;
   }
 
+  #menuModal .menu-modal-close {
+    top: calc(var(--app-top-offset-mobile) + 0.38rem);
+    right: calc((100vw - min(980px, 94vw)) / 2 + 0.5rem);
+  }
+
   .mini-player {
     --mini-thumb-size: 3.15rem;
+    width: 100vw;
     left: 0;
     right: 0;
     bottom: 0;
+    transform: none;
   }
 
   .mini-player-shell,
@@ -1977,6 +2094,6 @@ button:active {
   }
 
   .mini-player-visible .app {
-    --app-bottom-clearance: var(--mini-player-clearance-mobile);
+    --app-bottom-clearance: var(--mini-player-runtime-height);
   }
 }

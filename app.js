@@ -193,6 +193,8 @@ let swReg = null;
 let updateToastNode = null;
 let lastAdminVisibilityDiagKey = "";
 let miniMarqueeRefreshFrame = 0;
+let miniPlayerMetricFrame = 0;
+let menuModalMorphFrame = 0;
 const miniMarqueeTimers = new WeakMap();
 
 const el = {
@@ -367,7 +369,10 @@ function init() {
 }
 
 function bind() {
-  window.addEventListener("resize", scheduleMiniMarqueeSync);
+  window.addEventListener("resize", () => {
+    scheduleMiniMarqueeSync();
+    scheduleMiniPlayerMetricSync();
+  });
   if (el.signinForm) {
     el.signinForm.addEventListener("submit", onSigninSubmit);
   }
@@ -521,6 +526,31 @@ function bind() {
     }
   });
   document.addEventListener("keydown", onGlobalPlaybackKeydown);
+}
+
+function syncMenuButtonUi() {
+  const menuBtn = document.getElementById("menuBtn");
+  const open = Boolean(el.menuModal && !el.menuModal.classList.contains("hidden"));
+  document.body.classList.toggle("menu-modal-open", open);
+  if (!(menuBtn instanceof HTMLElement)) return;
+  menuBtn.setAttribute("aria-expanded", open ? "true" : "false");
+  menuBtn.setAttribute("aria-label", open ? "Close menu" : "Menu");
+  menuBtn.title = open ? "close menu" : "menu";
+}
+
+function scheduleMenuModalMorph(open) {
+  if (menuModalMorphFrame) {
+    cancelAnimationFrame(menuModalMorphFrame);
+    menuModalMorphFrame = 0;
+  }
+  document.body.classList.toggle("menu-modal-morph-ready", false);
+  if (!open) return;
+  menuModalMorphFrame = requestAnimationFrame(() => {
+    menuModalMorphFrame = requestAnimationFrame(() => {
+      menuModalMorphFrame = 0;
+      document.body.classList.toggle("menu-modal-morph-ready", true);
+    });
+  });
 }
 
 function registerServiceWorker() {
@@ -810,8 +840,15 @@ function renderIdentity() {
   const frag = el.tplIn.content.cloneNode(true);
   const menuBtn = frag.querySelector("#menuBtn");
   const ban = activeBanForPubkey(state.identity.pubkey);
-  menuBtn?.addEventListener("click", () => openModal(el.menuModal));
+  menuBtn?.addEventListener("click", () => {
+    if (el.menuModal && !el.menuModal.classList.contains("hidden")) {
+      closeModal(el.menuModal);
+    } else {
+      openModal(el.menuModal);
+    }
+  });
   el.identityContainer.appendChild(frag);
+  syncMenuButtonUi();
   if (el.menuIdentity) {
     const flags = [];
     if (isAdminMe()) flags.push("admin");
@@ -3878,6 +3915,29 @@ function scheduleMiniMarqueeSync() {
   });
 }
 
+function syncMiniPlayerMetrics() {
+  const root = document.documentElement;
+  const host = el.miniPlayer;
+  if (!root || !host || host.classList.contains("hidden")) {
+    root?.style.removeProperty("--mini-player-runtime-height");
+    return;
+  }
+  const height = Math.max(0, Math.ceil(host.getBoundingClientRect().height || 0));
+  if (height > 0) {
+    root.style.setProperty("--mini-player-runtime-height", `${height}px`);
+  }
+}
+
+function scheduleMiniPlayerMetricSync() {
+  if (miniPlayerMetricFrame) {
+    cancelAnimationFrame(miniPlayerMetricFrame);
+  }
+  miniPlayerMetricFrame = requestAnimationFrame(() => {
+    miniPlayerMetricFrame = 0;
+    syncMiniPlayerMetrics();
+  });
+}
+
 function renderMiniPlayer() {
   const host = el.miniPlayer;
   if (!host) return;
@@ -3897,6 +3957,7 @@ function renderMiniPlayer() {
     }
     syncMiniSwipePreview(-1, null);
     syncMiniSwipePreview(1, null);
+    scheduleMiniPlayerMetricSync();
     return;
   }
   const adLocked = isHeuristicAdLocked();
@@ -3943,6 +4004,7 @@ function renderMiniPlayer() {
   }
   updateMiniProgressUi();
   scheduleMiniMarqueeSync();
+  scheduleMiniPlayerMetricSync();
 }
 
 function updateMiniProgressUi() {
@@ -4801,6 +4863,7 @@ function canRestoreFocus(node) {
 
 function syncModalEnvironment() {
   document.body.classList.toggle("modal-open", visibleModalNodes().length > 0);
+  syncMenuButtonUi();
 }
 
 function modalFocusTarget(node) {
@@ -4830,6 +4893,7 @@ function openModal(node) {
     node.scrollTop = 0;
   }
   syncModalEnvironment();
+  scheduleMenuModalMorph(node === el.menuModal);
   const focusTarget = modalFocusTarget(node);
   window.requestAnimationFrame(() => {
     if (!(focusTarget instanceof HTMLElement)) return;
@@ -4844,6 +4908,9 @@ function openModal(node) {
 function closeModal(node, { restoreFocus = true } = {}) {
   if (!node || node.classList.contains("hidden")) return;
   node.classList.add("hidden");
+  if (node === el.menuModal) {
+    scheduleMenuModalMorph(false);
+  }
   if (node === el.userModal) {
     state.userModalContext = null;
   }
