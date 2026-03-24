@@ -883,16 +883,18 @@ button:active {
 }
 
 .item-thumb {
-  flex: none;
+  position: relative;
+  flex: 0 0 var(--thumb-size);
+  min-width: var(--thumb-size);
   width: var(--thumb-size);
   height: var(--thumb-size);
+  aspect-ratio: 1 / 1;
   border-radius: 0.88rem;
   overflow: hidden;
   border: 1px solid #bc8c58;
   box-shadow: 0 8px 20px -18px rgba(22, 10, 7, 0.55);
   background: rgba(255, 248, 236, 0.82);
   display: block;
-  flex: none;
 }
 
 .item-thumb img {
@@ -900,6 +902,20 @@ button:active {
   height: 100%;
   object-fit: cover;
   display: block;
+}
+
+.item-thumb.thumb-missing,
+.mini-thumb-shell.thumb-missing,
+.mini-swipe-thumb.thumb-missing {
+  background:
+    linear-gradient(135deg, rgba(209, 171, 108, 0.34), rgba(255, 247, 231, 0.92)),
+    repeating-linear-gradient(135deg, rgba(128, 93, 54, 0.12) 0 6px, rgba(255, 255, 255, 0.08) 6px 12px);
+}
+
+.item-thumb.thumb-missing img,
+.mini-thumb-shell.thumb-missing img,
+.mini-swipe-thumb.thumb-missing {
+  opacity: 0;
 }
 
 .item-swipe-underlay {
@@ -1527,6 +1543,8 @@ body.menu-modal-open.menu-modal-morph-ready #menuModal .menu-modal-close .menu-g
 .mini-swipe-thumb {
   width: 3.6rem;
   height: 3.6rem;
+  min-width: 3.6rem;
+  aspect-ratio: 1 / 1;
   border-radius: 0.92rem;
   overflow: hidden;
   border: 1px solid #bc8c58;
@@ -1545,6 +1563,8 @@ body.menu-modal-open.menu-modal-morph-ready #menuModal .menu-modal-close .menu-g
   align-self: center;
   width: var(--mini-thumb-size);
   height: var(--mini-thumb-size);
+  min-width: var(--mini-thumb-size);
+  aspect-ratio: 1 / 1;
   border-radius: 0.92rem;
   overflow: hidden;
   border: 1px solid #bc8c58;

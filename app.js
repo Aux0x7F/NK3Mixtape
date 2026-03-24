@@ -74,10 +74,13 @@ const SONG_ARTIST_STOP_WORDS = new Set([
   "x",
 ]);
 
+const SHELL_VERSION = "2026-03-24a";
+const SHELL_CACHE_PREFIX = "nk3-shell-";
 const STORAGE_SESSION = "nk3.session.v2";
 const STORAGE_IDENTITY_LEGACY = "nk3.identity.v1";
 const STORAGE_LAST_NAME = "nk3.name.v1";
 const STORAGE_BACKUPS = "nk3.backups.v1";
+const STORAGE_SHELL_FLUSH = "nk3.shell-flush.v1";
 const STORAGE_RECOVERY = "nk3.recovery.v1";
 const RECOVERY_PROTOCOL = "nk3-recovery/v1";
 const SHARED_CACHE_META_RECOVERY = "recovery_doc";
@@ -338,7 +341,8 @@ function showCompatibilityGate(reason = "") {
   }
 }
 
-function init() {
+async function init() {
+  if (!(await ensureFreshShellVersion())) return;
   registerServiceWorker();
   bind();
   if (el.infoRepoLink) {
@@ -366,6 +370,65 @@ function init() {
   void hydrateFromSharedCache();
   void tryRestoreBootstrap();
   connect();
+}
+
+function getDocumentShellVersion() {
+  const meta = document.querySelector('meta[name="nk3-shell-version"]');
+  return String(meta?.getAttribute("content") || "").trim();
+}
+
+function withShellCacheBust(url) {
+  const next = new URL(url, window.location.href);
+  next.searchParams.set("_nk3v", `${SHELL_VERSION}-${Date.now()}`);
+  return next.toString();
+}
+
+async function flushShellCaches(options = {}) {
+  const { reason = "manual", unregister = false } = options;
+  console.info("[nk3] flushing shell caches", { reason });
+  if ("serviceWorker" in navigator) {
+    try {
+      navigator.serviceWorker.controller?.postMessage({ type: "FLUSH_SHELL_CACHE" });
+    } catch (err) {
+      console.error(err);
+    }
+  }
+  if ("caches" in window) {
+    try {
+      const keys = await caches.keys();
+      await Promise.all(keys.filter((key) => key.startsWith(SHELL_CACHE_PREFIX)).map((key) => caches.delete(key)));
+    } catch (err) {
+      console.error(err);
+    }
+  }
+  if (unregister && "serviceWorker" in navigator) {
+    try {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map((reg) => reg.unregister().catch(() => false)));
+      swReg = null;
+    } catch (err) {
+      console.error(err);
+    }
+  }
+}
+
+async function ensureFreshShellVersion() {
+  const documentVersion = getDocumentShellVersion();
+  if (!documentVersion || documentVersion === SHELL_VERSION) return true;
+  if (navigator.onLine === false) {
+    console.warn("[nk3] shell version mismatch while offline; skipping auto flush", { documentVersion, appVersion: SHELL_VERSION });
+    return true;
+  }
+  const flushKey = `${STORAGE_SHELL_FLUSH}:${documentVersion}:${SHELL_VERSION}`;
+  console.warn("[nk3] shell version mismatch", { documentVersion, appVersion: SHELL_VERSION });
+  if (sessionStorage.getItem(flushKey) === "1") {
+    sessionStorage.removeItem(flushKey);
+    return true;
+  }
+  sessionStorage.setItem(flushKey, "1");
+  await flushShellCaches({ reason: "shell-version-mismatch", unregister: true });
+  window.location.replace(withShellCacheBust(window.location.href));
+  return false;
 }
 
 function bind() {
@@ -555,8 +618,9 @@ function scheduleMenuModalMorph(open) {
 
 function registerServiceWorker() {
   if (!("serviceWorker" in navigator)) return;
-  void navigator.serviceWorker.register("./sw.js").then((registration) => {
+  void navigator.serviceWorker.register("./sw.js", { updateViaCache: "none" }).then((registration) => {
     swReg = registration;
+    void registration.update().catch(() => {});
     if (registration.waiting) {
       notifyAppUpdate(registration);
     }
@@ -579,6 +643,12 @@ function registerServiceWorker() {
     if (!window.__nk3SwReloading) {
       window.__nk3SwReloading = true;
       window.location.reload();
+    }
+  });
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") {
+      void swReg?.update?.().catch(() => {});
     }
   });
 }
@@ -1915,9 +1985,11 @@ function renderRow(r) {
       closeEntryOverflow();
     });
     const thumbImg = document.createElement("img");
-    thumbImg.src = `https://i.ytimg.com/vi/${r.youtube_id}/hqdefault.jpg`;
     thumbImg.alt = "";
     thumbImg.loading = "lazy";
+    thumbImg.decoding = "async";
+    thumbImg.referrerPolicy = "no-referrer";
+    setImageSource(thumbImg, `https://i.ytimg.com/vi/${r.youtube_id}/hqdefault.jpg`);
     thumbLink.appendChild(thumbImg);
     shell.appendChild(thumbLink);
   } else {
@@ -3839,15 +3911,42 @@ async function syncYouTubeProgressFromPlayer() {
 
 function setImageSource(img, src) {
   if (!(img instanceof HTMLImageElement)) return;
+  ensureImageFallbackHandlers(img);
   const nextSrc = String(src || "");
   const currentSrc = img.getAttribute("src") || "";
   if (!nextSrc) {
     if (currentSrc) img.removeAttribute("src");
+    syncImageFallbackState(img, false);
     return;
   }
+  syncImageFallbackState(img, false);
   if (currentSrc !== nextSrc) {
     img.src = nextSrc;
   }
+}
+
+function imageFallbackHost(img) {
+  if (!(img instanceof HTMLImageElement)) return null;
+  return img.closest(".item-thumb, .mini-thumb-shell") || img;
+}
+
+function syncImageFallbackState(img, missing) {
+  const host = imageFallbackHost(img);
+  if (host instanceof HTMLElement) {
+    host.classList.toggle("thumb-missing", Boolean(missing));
+  }
+}
+
+function ensureImageFallbackHandlers(img) {
+  if (!(img instanceof HTMLImageElement) || img.dataset.thumbFallbackBound === "1") return;
+  img.dataset.thumbFallbackBound = "1";
+  img.addEventListener("load", () => {
+    syncImageFallbackState(img, false);
+  });
+  img.addEventListener("error", () => {
+    syncImageFallbackState(img, true);
+    img.removeAttribute("src");
+  });
 }
 
 function prefersReducedMotion() {
@@ -4744,6 +4843,10 @@ function installConsoleInterface() {
         pending: state.sharedCache.pending.size,
       },
     }),
+    flushShellCache: async () => {
+      await flushShellCaches({ reason: "console", unregister: true });
+      window.location.replace(withShellCacheBust(window.location.href));
+    },
   };
 }
 

@@ -1,4 +1,6 @@
-const CACHE_NAME = "nk3-shell-v18";
+const SHELL_VERSION = "2026-03-24a";
+const CACHE_PREFIX = "nk3-shell-";
+const CACHE_NAME = `${CACHE_PREFIX}${SHELL_VERSION}`;
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -20,10 +22,12 @@ const APP_SHELL = [
   "./assets/nk3-paper-v3.png",
 ];
 
+const CRITICAL_SHELL_EXTENSIONS = [".css", ".js", ".webmanifest"];
+
 self.addEventListener("install", (event) => {
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE_NAME);
-    await cache.addAll(APP_SHELL);
+    await cache.addAll(APP_SHELL.map((path) => new Request(path, { cache: "reload" })));
   })());
 });
 
@@ -32,6 +36,10 @@ self.addEventListener("message", (event) => {
   if (!msg || typeof msg !== "object") return;
   if (msg.type === "SKIP_WAITING") {
     void self.skipWaiting();
+    return;
+  }
+  if (msg.type === "FLUSH_SHELL_CACHE") {
+    event.waitUntil(flushShellCaches());
   }
 });
 
@@ -53,8 +61,22 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(networkFirst(req));
     return;
   }
+  if (isCriticalShellAsset(url)) {
+    event.respondWith(networkFirst(req));
+    return;
+  }
   event.respondWith(staleWhileRevalidate(req));
 });
+
+async function flushShellCaches() {
+  const keys = await caches.keys();
+  await Promise.all(keys.filter((key) => key.startsWith(CACHE_PREFIX)).map((key) => caches.delete(key)));
+}
+
+function isCriticalShellAsset(url) {
+  const path = url.pathname.toLowerCase();
+  return CRITICAL_SHELL_EXTENSIONS.some((ext) => path.endsWith(ext));
+}
 
 async function networkFirst(req) {
   const cache = await caches.open(CACHE_NAME);
