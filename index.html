@@ -7,72 +7,146 @@
   <link rel="icon" type="image/x-icon" href="./assets/nk3-favicon.ico">
   <link rel="manifest" href="./manifest.webmanifest">
   <meta name="theme-color" content="#000000">
-  <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./styles/styles.css">
 </head>
 <body>
+  <noscript>
+    <style>
+      #authSplash,
+      #appMain,
+      #miniPlayer,
+      #menuModal,
+      #adminModal,
+      #profileModal,
+      #userModal,
+      #addSongModal,
+      #editSongModal,
+      #deleteConfirmModal,
+      #infoModal,
+      #ytPlayerHost,
+      #toastStack {
+        display: none !important;
+      }
+    </style>
+    <section class="compat-gate compat-gate-visible compat-gate-static" aria-live="polite">
+      <div class="compat-card">
+        <h2>Browser Too Restrictive</h2>
+        <p>Sorry, your browser is pretty secure, but also excessively restrictive for dynamic content. I recommend Firefox with Decentraleyes, Privacy Badger, and uBlock Origin.</p>
+      </div>
+    </section>
+  </noscript>
+
+  <section id="compatGate" class="compat-gate hidden" aria-live="polite">
+    <div class="compat-card">
+      <h2>Browser Too Restrictive</h2>
+      <p>Sorry, your browser is pretty secure, but also excessively restrictive for dynamic content. I recommend Firefox with Decentraleyes, Privacy Badger, and uBlock Origin.</p>
+      <p id="compatReason" class="compat-reason hidden"></p>
+    </div>
+  </section>
+
   <section id="authSplash" class="splash">
     <div class="splash-card">
       <div class="brand splash-brand">
         <img class="brand-logo" src="./assets/nk3-logo-stacked.png" alt="">
-        <h1>No Kings Day 3 Mixtape</h1>
+        <h1 data-text="No Kings Day 3 Mixtape">No Kings Day 3 Mixtape</h1>
       </div>
-      <div id="splashStatus" class="status">sign in to open the playlist</div>
+      <div id="splashStatus" class="status">Your alias and password become your identity. They are not stored for recovery, so keep them safe.</div>
       <form id="signinForm" class="signin" autocomplete="off">
         <input id="nameInput" name="name" placeholder="alias" maxlength="32" required>
         <input id="passphraseInput" name="passphrase" type="password" placeholder="password" required>
-        <button type="submit">enter</button>
+        <button type="submit">Create/Login</button>
       </form>
       <button id="splashInstallBtn" class="ghost hidden" type="button">install app</button>
     </div>
   </section>
 
   <main id="appMain" class="app hidden">
+    <div id="appBootOverlay" class="app-boot-overlay hidden" aria-live="polite" aria-label="Loading playlist">
+      <div class="app-spinner" aria-hidden="true"></div>
+    </div>
     <header class="header">
       <div class="brand">
         <img class="brand-logo" src="./assets/nk3-logo-stacked.png" alt="">
-        <h1>No Kings Day 3 Mixtape</h1>
+        <h1 data-text="No Kings Day 3 Mixtape">No Kings Day 3 Mixtape</h1>
       </div>
       <div id="identityContainer" class="identity"></div>
     </header>
 
     <section class="actions">
       <button id="openAddSongBtn" class="add-song hidden" type="button">Add song</button>
+      <button id="listModeBtn" class="list-mode hidden" type="button" aria-label="list mode">Ranked</button>
     </section>
 
     <section id="list" class="list"></section>
   </main>
 
   <div id="miniPlayer" class="mini-player hidden" aria-live="polite">
-    <div class="mini-top">
-      <div class="mini-meta">
-        <div id="miniPlayerTitle" class="mini-title"></div>
-        <div id="miniPlayerArtist" class="mini-artist"></div>
+    <div class="mini-swipe-underlay" aria-hidden="true">
+      <div id="miniPrevPreview" class="mini-swipe-zone mini-swipe-prev">
+        <div id="miniPrevPreviewIcon" class="mini-swipe-icon"></div>
+        <img id="miniPrevPreviewThumb" class="mini-swipe-thumb" alt="">
+        <div class="mini-swipe-copy">
+          <div id="miniPrevPreviewTitle" class="mini-swipe-title"></div>
+          <div id="miniPrevPreviewArtist" class="mini-swipe-artist"></div>
+        </div>
       </div>
-      <div class="mini-controls">
-        <button id="miniPrevBtn" type="button" aria-label="previous">⏮</button>
-        <button id="miniPlayPauseBtn" type="button" aria-label="play pause">⏯</button>
-        <button id="miniNextBtn" type="button" aria-label="next">⏭</button>
+      <div id="miniNextPreview" class="mini-swipe-zone mini-swipe-next">
+        <div class="mini-swipe-copy">
+          <div id="miniNextPreviewTitle" class="mini-swipe-title"></div>
+          <div id="miniNextPreviewArtist" class="mini-swipe-artist"></div>
+        </div>
+        <img id="miniNextPreviewThumb" class="mini-swipe-thumb" alt="">
+        <div id="miniNextPreviewIcon" class="mini-swipe-icon"></div>
       </div>
     </div>
-    <div class="mini-progress-row">
-      <span id="miniElapsed" class="mini-time">0:00</span>
-      <input id="miniProgress" class="mini-progress" type="range" min="0" max="100" value="0" step="1" aria-label="seek">
-      <span id="miniDuration" class="mini-time">0:00</span>
+    <div id="miniPlayerShell" class="mini-player-shell">
+      <div class="mini-thumb-shell" aria-hidden="true">
+        <img id="miniThumbImage" class="mini-thumb-image" alt="">
+      </div>
+      <div class="mini-main">
+        <div class="mini-header-row">
+          <div class="mini-top">
+            <div class="mini-meta">
+              <div class="mini-line-clip">
+                <div id="miniPlayerTitle" class="mini-title"></div>
+              </div>
+              <div class="mini-line-clip">
+                <div id="miniPlayerArtist" class="mini-artist"></div>
+              </div>
+            </div>
+          </div>
+          <div class="mini-controls-row">
+            <div class="mini-controls">
+              <button id="miniPrevBtn" type="button" aria-label="previous">⏮</button>
+              <button id="miniPlayPauseBtn" type="button" aria-label="play pause">⏯</button>
+              <button id="miniNextBtn" type="button" aria-label="next">⏭</button>
+            </div>
+          </div>
+        </div>
+        <div class="mini-progress-row">
+          <span id="miniElapsed" class="mini-time">0:00</span>
+          <div class="mini-progress-hitbox">
+            <input id="miniProgress" class="mini-progress" type="range" min="0" max="100" value="0" step="1" aria-label="seek">
+          </div>
+          <span id="miniDuration" class="mini-time">0:00</span>
+        </div>
+      </div>
     </div>
   </div>
 
   <template id="identityTemplateLoggedIn">
     <div class="signed-in">
-      <button id="menuBtn" type="button" aria-label="Menu">☰</button>
+      <button id="menuBtn" type="button" aria-label="Menu"></button>
     </div>
   </template>
 
   <div id="menuModal" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modal-card">
-      <button class="modal-close" type="button" data-close-modal="menuModal">x</button>
+      <button class="modal-close" type="button" aria-label="Close menu" data-close-modal="menuModal"></button>
       <div id="menuIdentity" class="menu-identity"></div>
       <button id="openProfileBtn" type="button">profile</button>
       <button id="openAdminBtn" class="hidden" type="button">admin</button>
+      <button id="openInfoBtn" type="button">information</button>
       <button id="menuInstallBtn" class="hidden" type="button">install app</button>
       <button id="menuLogoutBtn" type="button">logout</button>
     </div>
@@ -80,7 +154,7 @@
 
   <div id="adminModal" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modal-card">
-      <button class="modal-close" type="button" data-close-modal="adminModal">x</button>
+      <button class="modal-close" type="button" aria-label="Close admin" data-close-modal="adminModal"></button>
       <div class="admin-modal-body">
         <section class="admin-section">
           <h2>Setup</h2>
@@ -127,7 +201,7 @@
 
   <div id="profileModal" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modal-card">
-      <button class="modal-close" type="button" data-close-modal="profileModal">x</button>
+      <button class="modal-close" type="button" aria-label="Close profile" data-close-modal="profileModal"></button>
       <form id="profileForm" class="profile-form" autocomplete="off">
         <input id="profileNameInput" maxlength="32" placeholder="alias" required>
         <input id="profileSocialInput" maxlength="220" placeholder="social link">
@@ -139,7 +213,7 @@
 
   <div id="userModal" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modal-card">
-      <button class="modal-close" type="button" data-close-modal="userModal">x</button>
+      <button class="modal-close" type="button" aria-label="Close user" data-close-modal="userModal"></button>
       <div id="userModalName" class="user-modal-name"></div>
       <a id="userModalSocial" class="user-modal-social hidden" href="#" target="_blank" rel="noopener noreferrer"></a>
       <div id="userModalBio" class="user-modal-bio"></div>
@@ -158,7 +232,7 @@
 
   <div id="addSongModal" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modal-card">
-      <button class="modal-close" type="button" data-close-modal="addSongModal">x</button>
+      <button class="modal-close" type="button" aria-label="Close add song" data-close-modal="addSongModal"></button>
       <form id="entryForm" class="entry-form" autocomplete="off">
         <input id="titleInput" name="title" placeholder="title" maxlength="120" required>
         <input id="artistInput" name="artist" placeholder="artist" maxlength="120" required>
@@ -173,7 +247,7 @@
 
   <div id="editSongModal" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modal-card">
-      <button class="modal-close" type="button" data-close-modal="editSongModal">x</button>
+      <button class="modal-close" type="button" aria-label="Close edit song" data-close-modal="editSongModal"></button>
       <form id="editEntryForm" class="entry-form" autocomplete="off">
         <input id="editTitleInput" name="title" placeholder="title" maxlength="120" required>
         <input id="editArtistInput" name="artist" placeholder="artist" maxlength="120" required>
@@ -188,7 +262,7 @@
 
   <div id="deleteConfirmModal" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modal-card">
-      <button class="modal-close" type="button" data-close-modal="deleteConfirmModal">x</button>
+      <button class="modal-close" type="button" aria-label="Close delete confirmation" data-close-modal="deleteConfirmModal"></button>
       <div id="deleteConfirmText" class="confirm-text"></div>
       <div class="confirm-actions">
         <button id="confirmDeleteBtn" type="button" class="danger">delete</button>
@@ -197,11 +271,37 @@
     </div>
   </div>
 
+  <div id="infoModal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card">
+      <button class="modal-close" type="button" aria-label="Close information" data-close-modal="infoModal"></button>
+      <div class="info-copy">This is a decentralized, resilient democratization of identity and rank voting dressed up as an interface for a popular video site and achieving our collaborative playlist for No Kings 3. Enjoy!</div>
+      <div class="info-heading">Nerd stuff:</div>
+      <a id="infoRepoLink" class="info-link" href="https://github.com/Aux0x7F/NK3Mixtape" target="_blank" rel="noopener noreferrer">https://github.com/Aux0x7F/NK3Mixtape</a>
+    </div>
+  </div>
+
   <div id="ytPlayerHost" class="yt-host" aria-hidden="true"></div>
   <div id="toastStack" class="toast-stack" aria-live="polite" aria-atomic="false"></div>
 
   <script src="./vendor/event-tools.bundle.js"></script>
   <script src="./vendor/event-tools-shim.js"></script>
+  <script nomodule>
+    (function () {
+      var body = document.body;
+      if (body && body.className.indexOf("compat-blocked") === -1) {
+        body.className += (body.className ? " " : "") + "compat-blocked";
+      }
+      var gate = document.getElementById("compatGate");
+      if (gate) {
+        gate.className = gate.className.replace(/\bhidden\b/g, "").replace(/\s+/g, " ") + " compat-gate-visible";
+      }
+      var reason = document.getElementById("compatReason");
+      if (reason) {
+        reason.textContent = "Missing: JavaScript modules unavailable.";
+        reason.className = reason.className.replace(/\bhidden\b/g, "").replace(/\s+/g, " ");
+      }
+    })();
+  </script>
   <script type="module" src="./app.js"></script>
 </body>
 </html>

@@ -1,6 +1,13 @@
 const eventTools = window.EventTools || window[["No", "strTools"].join("")];
-if (!eventTools) throw new Error("event tools unavailable");
-const { SimplePool, finalizeEvent, getPublicKey, verifyEvent } = eventTools;
+const compatFailure = detectCriticalCompatFailure(eventTools);
+const { SimplePool, finalizeEvent, getPublicKey, verifyEvent } = compatFailure
+  ? {
+      SimplePool: class SimplePoolFallback {},
+      finalizeEvent: null,
+      getPublicKey: null,
+      verifyEvent: null,
+    }
+  : eventTools;
 
 const APP = {
   tag: "no-kings-playlist",
@@ -77,8 +84,20 @@ const SHARED_CACHE_META_RECOVERY = "recovery_doc";
 const SHARED_CACHE_META_BACKUPS = "backups";
 const SHARED_CACHE_LOAD_LIMIT = 8000;
 const SHARED_CACHE_TIMEOUT_MS = 8000;
+const LIST_MODE_CYCLE = ["ranked", "recent", "shuffle"];
+const LIST_MODE_LABELS = {
+  ranked: "Ranked",
+  recent: "Recent",
+  shuffle: "Shuffle",
+};
+const LIST_MODE_HOLD_MS = 550;
+const REPO_URL = "https://github.com/Aux0x7F/NK3Mixtape";
+const SWIPE_TRIGGER_RATIO = 0.2;
+const MINI_BACKGROUND_HOLD_MS = 520;
+const MINI_MARQUEE_DELAY_MS = 2000;
+const MINI_MARQUEE_PX_PER_SEC = 30;
 
-const pool = new SimplePool();
+const pool = compatFailure ? null : new SimplePool();
 
 const state = {
   identity: null,
@@ -118,6 +137,21 @@ const state = {
   snapshot: null,
   snapshotRequestsSeen: new Set(),
   backups: [],
+  modal: {
+    lastFocused: null,
+  },
+  ui: {
+    appReady: false,
+    appReadySeq: 0,
+    fontsReadyPromise: null,
+  },
+  list: {
+    mode: "ranked",
+    shuffleOrder: [],
+    modeHoldTimer: 0,
+    modeHoldTriggered: false,
+    openEntryMenuId: "",
+  },
   youtube: {
     apiPromise: null,
     playerPromise: null,
@@ -129,6 +163,21 @@ const state = {
     duration: 0,
     seeking: false,
     progressTimer: 0,
+    ad: {
+      active: false,
+      pending: false,
+      muted: false,
+      retrySeq: 0,
+      lastTargetVideoId: "",
+      watchTimer: 0,
+    },
+    queue: {
+      mode: "ranked",
+      entryIds: [],
+      index: -1,
+      capturedAt: 0,
+      shuffleSeedIds: [],
+    },
   },
   userModalContext: null,
   deleteConfirmContext: null,
@@ -142,10 +191,16 @@ let liveReconnectTimer = 0;
 let liveReconnectAttempt = 0;
 let swReg = null;
 let updateToastNode = null;
+let lastAdminVisibilityDiagKey = "";
+let miniMarqueeRefreshFrame = 0;
+const miniMarqueeTimers = new WeakMap();
 
 const el = {
   appMain: document.getElementById("appMain"),
+  appBootOverlay: document.getElementById("appBootOverlay"),
   authSplash: document.getElementById("authSplash"),
+  compatGate: document.getElementById("compatGate"),
+  compatReason: document.getElementById("compatReason"),
   signinForm: document.getElementById("signinForm"),
   nameInput: document.getElementById("nameInput"),
   passphraseInput: document.getElementById("passphraseInput"),
@@ -158,6 +213,7 @@ const el = {
   wizardText: document.getElementById("wizardText"),
   claimAdminBtn: document.getElementById("claimAdminBtn"),
   downloadKeysBtn: document.getElementById("downloadKeysBtn"),
+  listModeBtn: document.getElementById("listModeBtn"),
   openAddSongBtn: document.getElementById("openAddSongBtn"),
   cancelAddSongBtn: document.getElementById("cancelAddSongBtn"),
   addSongModal: document.getElementById("addSongModal"),
@@ -177,8 +233,11 @@ const el = {
   adminModal: document.getElementById("adminModal"),
   openProfileBtn: document.getElementById("openProfileBtn"),
   openAdminBtn: document.getElementById("openAdminBtn"),
+  openInfoBtn: document.getElementById("openInfoBtn"),
   menuInstallBtn: document.getElementById("menuInstallBtn"),
   menuLogoutBtn: document.getElementById("menuLogoutBtn"),
+  infoModal: document.getElementById("infoModal"),
+  infoRepoLink: document.getElementById("infoRepoLink"),
   profileModal: document.getElementById("profileModal"),
   profileForm: document.getElementById("profileForm"),
   profileNameInput: document.getElementById("profileNameInput"),
@@ -209,8 +268,20 @@ const el = {
   ytPlayerHost: document.getElementById("ytPlayerHost"),
   list: document.getElementById("list"),
   miniPlayer: document.getElementById("miniPlayer"),
+  miniPlayerShell: document.getElementById("miniPlayerShell"),
+  miniThumbImage: document.getElementById("miniThumbImage"),
   miniPlayerTitle: document.getElementById("miniPlayerTitle"),
   miniPlayerArtist: document.getElementById("miniPlayerArtist"),
+  miniPrevPreview: document.getElementById("miniPrevPreview"),
+  miniPrevPreviewIcon: document.getElementById("miniPrevPreviewIcon"),
+  miniPrevPreviewThumb: document.getElementById("miniPrevPreviewThumb"),
+  miniPrevPreviewTitle: document.getElementById("miniPrevPreviewTitle"),
+  miniPrevPreviewArtist: document.getElementById("miniPrevPreviewArtist"),
+  miniNextPreview: document.getElementById("miniNextPreview"),
+  miniNextPreviewIcon: document.getElementById("miniNextPreviewIcon"),
+  miniNextPreviewThumb: document.getElementById("miniNextPreviewThumb"),
+  miniNextPreviewTitle: document.getElementById("miniNextPreviewTitle"),
+  miniNextPreviewArtist: document.getElementById("miniNextPreviewArtist"),
   miniPrevBtn: document.getElementById("miniPrevBtn"),
   miniPlayPauseBtn: document.getElementById("miniPlayPauseBtn"),
   miniNextBtn: document.getElementById("miniNextBtn"),
@@ -220,11 +291,58 @@ const el = {
   toastStack: document.getElementById("toastStack"),
 };
 
-void init();
+if (compatFailure) {
+  showCompatibilityGate(compatFailure);
+} else {
+  void init();
+}
+
+function detectCriticalCompatFailure(eventToolsRef) {
+  const checks = [
+    ["modern JavaScript support", typeof Promise === "function" && typeof Map === "function" && typeof Set === "function"],
+    ["required DOM APIs", typeof document?.querySelector === "function" && typeof window?.requestAnimationFrame === "function"],
+    ["fetch", typeof window?.fetch === "function"],
+    ["URLSearchParams", typeof window?.URLSearchParams === "function"],
+    ["TextEncoder", typeof window?.TextEncoder === "function"],
+    ["local storage", storageAvailable()],
+    ["Web Crypto", Boolean(window?.crypto?.subtle) && typeof window?.crypto?.getRandomValues === "function"],
+    ["event tools bundle", Boolean(eventToolsRef && typeof eventToolsRef.SimplePool === "function" && typeof eventToolsRef.finalizeEvent === "function" && typeof eventToolsRef.getPublicKey === "function" && typeof eventToolsRef.verifyEvent === "function")],
+  ];
+  const failed = checks.find(([, ok]) => !ok);
+  return failed ? `${failed[0]} unavailable` : "";
+}
+
+function storageAvailable() {
+  try {
+    const key = "__nk3_storage_test__";
+    window.localStorage?.setItem(key, "1");
+    window.localStorage?.removeItem(key);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function showCompatibilityGate(reason = "") {
+  document.body.classList.add("compat-blocked");
+  el.authSplash?.classList.add("hidden");
+  el.appMain?.classList.add("hidden");
+  el.miniPlayer?.classList.add("hidden");
+  el.compatGate?.classList.remove("hidden");
+  el.compatGate?.classList.add("compat-gate-visible");
+  if (el.compatReason) {
+    el.compatReason.textContent = reason ? `Missing: ${reason}.` : "";
+    el.compatReason.classList.toggle("hidden", !reason);
+  }
+}
 
 function init() {
   registerServiceWorker();
   bind();
+  if (el.infoRepoLink) {
+    el.infoRepoLink.href = REPO_URL;
+    el.infoRepoLink.textContent = REPO_URL;
+  }
   initInstallPrompt();
   hydrateIdentity();
   hydrateBackups();
@@ -249,15 +367,31 @@ function init() {
 }
 
 function bind() {
+  window.addEventListener("resize", scheduleMiniMarqueeSync);
   if (el.signinForm) {
     el.signinForm.addEventListener("submit", onSigninSubmit);
   }
   if (el.openAddSongBtn) {
     el.openAddSongBtn.addEventListener("click", () => {
       if (!state.identity) return;
+      closeEntryOverflow();
       openModal(el.addSongModal);
       el.titleInput?.focus();
     });
+  }
+  if (el.listModeBtn) {
+    el.listModeBtn.addEventListener("click", (event) => {
+      if (state.list.modeHoldTriggered) {
+        state.list.modeHoldTriggered = false;
+        event.preventDefault();
+        return;
+      }
+      cycleListMode();
+    });
+    el.listModeBtn.addEventListener("pointerdown", onListModePointerDown);
+    el.listModeBtn.addEventListener("pointerup", clearListModeHold);
+    el.listModeBtn.addEventListener("pointercancel", clearListModeHold);
+    el.listModeBtn.addEventListener("pointerleave", clearListModeHold);
   }
   if (el.cancelAddSongBtn) {
     el.cancelAddSongBtn.addEventListener("click", () => {
@@ -300,14 +434,20 @@ function bind() {
   el.backupFileInput.addEventListener("change", () => void onImportFile());
   if (el.openProfileBtn) {
     el.openProfileBtn.addEventListener("click", () => {
-      closeModal(el.menuModal);
+      closeModal(el.menuModal, { restoreFocus: false });
       openProfileModal();
     });
   }
   if (el.openAdminBtn) {
     el.openAdminBtn.addEventListener("click", () => {
-      closeModal(el.menuModal);
+      closeModal(el.menuModal, { restoreFocus: false });
       openModal(el.adminModal);
+    });
+  }
+  if (el.openInfoBtn) {
+    el.openInfoBtn.addEventListener("click", () => {
+      closeModal(el.menuModal, { restoreFocus: false });
+      openModal(el.infoModal);
     });
   }
   if (el.menuLogoutBtn) {
@@ -357,6 +497,10 @@ function bind() {
       state.youtube.seeking = false;
     });
   }
+  if (el.miniPlayer) {
+    bindMiniPlayerBackgroundLongPress(el.miniPlayer);
+    bindMiniPlayerSwipe(el.miniPlayer);
+  }
 
   document.querySelectorAll("[data-close-modal]").forEach((node) => {
     node.addEventListener("click", () => {
@@ -364,12 +508,19 @@ function bind() {
       closeModal(document.getElementById(id));
     });
   });
-  [el.menuModal, el.adminModal, el.profileModal, el.userModal, el.addSongModal, el.editSongModal, el.deleteConfirmModal].forEach((modal) => {
+  [el.menuModal, el.adminModal, el.infoModal, el.profileModal, el.userModal, el.addSongModal, el.editSongModal, el.deleteConfirmModal].forEach((modal) => {
     if (!modal) return;
     modal.addEventListener("click", (event) => {
       if (event.target === modal) closeModal(modal);
     });
   });
+  document.addEventListener("click", (event) => {
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target?.closest(".item-overflow")) {
+      closeEntryOverflow();
+    }
+  });
+  document.addEventListener("keydown", onGlobalPlaybackKeydown);
 }
 
 function registerServiceWorker() {
@@ -542,6 +693,7 @@ async function hydrateFromSharedCache() {
     console.error(err);
   } finally {
     state.sharedCache.hydrating = false;
+    if (state.identity) requestAppBootRelease();
   }
 }
 
@@ -626,11 +778,15 @@ function renderAccess() {
   el.authSplash.classList.toggle("hidden", signedIn);
   el.appMain.classList.toggle("hidden", !signedIn);
   if (!signedIn) {
+    state.ui.appReady = false;
+    state.ui.appReadySeq += 1;
     if (el.openAddSongBtn) el.openAddSongBtn.classList.add("hidden");
+    if (el.listModeBtn) el.listModeBtn.classList.add("hidden");
     if (state.lastName && el.nameInput) el.nameInput.value = state.lastName;
     if (el.passphraseInput) el.passphraseInput.value = "";
     closeModal(el.menuModal);
     closeModal(el.adminModal);
+    closeModal(el.infoModal);
     closeModal(el.profileModal);
     closeModal(el.userModal);
     closeModal(el.addSongModal);
@@ -639,9 +795,11 @@ function renderAccess() {
     state.userModalContext = null;
     state.deleteConfirmContext = null;
     state.editContext = null;
+    state.list.openEntryMenuId = "";
     if (el.menuIdentity) el.menuIdentity.textContent = "";
     el.identityContainer.replaceChildren();
   }
+  syncAppBootUi();
 }
 
 function renderIdentity() {
@@ -665,9 +823,11 @@ function renderIdentity() {
     el.openAddSongBtn.classList.remove("hidden");
     el.openAddSongBtn.disabled = Boolean(activeBanForPubkey(state.identity.pubkey));
   }
+  renderListControls();
   if (el.openAdminBtn) {
     const canOpenAdmin = isAdminMe() || !hasAdmin();
     el.openAdminBtn.classList.toggle("hidden", !canOpenAdmin);
+    maybeLogAdminVisibility(canOpenAdmin);
   }
   const locked = Boolean(activeBanForPubkey(state.identity.pubkey));
   for (const control of el.entryForm.querySelectorAll("input,button")) {
@@ -683,6 +843,116 @@ function renderIdentity() {
     el.showRevokedToggle.checked = false;
     closeModal(el.adminModal);
   }
+}
+
+function renderListControls() {
+  if (!el.listModeBtn) return;
+  const signedIn = Boolean(state.identity);
+  el.listModeBtn.classList.toggle("hidden", !signedIn);
+  if (!signedIn) return;
+
+  const mode = LIST_MODE_CYCLE.includes(state.list.mode) ? state.list.mode : "ranked";
+  const label = LIST_MODE_LABELS[mode] || LIST_MODE_LABELS.ranked;
+  const hint = mode === "shuffle" ? "shuffle mode; hold to reshuffle" : `${label.toLowerCase()} mode`;
+  el.listModeBtn.classList.toggle("is-shuffle", mode === "shuffle");
+  el.listModeBtn.dataset.mode = mode;
+  el.listModeBtn.setAttribute("aria-label", hint);
+  el.listModeBtn.title = hint;
+  el.listModeBtn.replaceChildren(createListModeButtonContent(mode, label));
+}
+
+function maybeLogAdminVisibility(canOpenAdmin) {
+  if (!state.identity || canOpenAdmin || !state.synced || !hasAdmin()) return;
+  const isMember = state.admins.has(state.identity.pubkey);
+  const payload = {
+    current_user_pubkey: state.identity.pubkey,
+    root_admin_pubkey: state.admin.pubkey,
+    admin_set_membership: isMember,
+    synced: state.synced,
+  };
+  const key = JSON.stringify(payload);
+  if (key === lastAdminVisibilityDiagKey) return;
+  lastAdminVisibilityDiagKey = key;
+  console.info("[nk3] admin hidden after sync", payload);
+}
+
+function isTouchLikeDevice() {
+  return Boolean(window.matchMedia?.("(pointer: coarse)")?.matches || navigator.maxTouchPoints > 0);
+}
+
+function shouldIgnorePlaybackKeyTarget(target) {
+  if (!(target instanceof Element)) return false;
+  if (target.closest("input, textarea, select, button, a, [contenteditable='true'], [contenteditable=''], [role='textbox']")) return true;
+  return false;
+}
+
+function onGlobalPlaybackKeydown(event) {
+  if (!state.identity) return;
+  if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+  if (event.code === "Space" || event.key === " ") {
+    event.preventDefault();
+    void onMiniPlayPause();
+    return;
+  }
+  if (shouldIgnorePlaybackKeyTarget(event.target)) return;
+  if (event.key === "ArrowLeft") {
+    event.preventDefault();
+    void onMiniPrev();
+    return;
+  }
+  if (event.key === "ArrowRight") {
+    event.preventDefault();
+    void onMiniNext();
+  }
+}
+
+function triggerHapticPulse() {
+  try {
+    if (typeof navigator?.vibrate === "function") {
+      navigator.vibrate(14);
+    }
+  } catch {
+    // ignore haptic failures
+  }
+}
+
+function swipeTriggerDistance(width) {
+  const baseWidth = Math.max(1, Number(width) || 0);
+  return Math.max(1, baseWidth * SWIPE_TRIGGER_RATIO);
+}
+
+function cycleListMode() {
+  if (!state.identity) return;
+  clearListModeHold();
+  closeEntryOverflow(false);
+  const currentIndex = Math.max(0, LIST_MODE_CYCLE.indexOf(state.list.mode));
+  state.list.mode = LIST_MODE_CYCLE[(currentIndex + 1) % LIST_MODE_CYCLE.length];
+  renderList();
+}
+
+function onListModePointerDown(event) {
+  if (state.list.mode !== "shuffle") return;
+  if ("button" in event && Number(event.button) !== 0) return;
+  clearListModeHold();
+  state.list.modeHoldTriggered = false;
+  state.list.modeHoldTimer = window.setTimeout(() => {
+    state.list.modeHoldTriggered = true;
+    reshuffleVisibleList();
+  }, LIST_MODE_HOLD_MS);
+}
+
+function clearListModeHold() {
+  if (state.list.modeHoldTimer) {
+    clearTimeout(state.list.modeHoldTimer);
+    state.list.modeHoldTimer = 0;
+  }
+}
+
+function reshuffleVisibleList() {
+  const rows = buildBaseRows();
+  state.list.shuffleOrder = shuffleIds(rows.map((row) => row.entry_id));
+  closeEntryOverflow(false);
+  renderList();
 }
 
 function renderWizard() {
@@ -743,6 +1013,8 @@ async function onSigninSubmit(e) {
     }
   }
   state.identity = { name, pubkey, secretKeyHex: bytesToHex(skBytes) };
+  state.ui.appReady = false;
+  state.ui.appReadySeq += 1;
   rememberName(pubkey, name, nowSec());
   persistSession();
   void ensureNameClaimForCurrentUser(name);
@@ -759,13 +1031,22 @@ function onLogout() {
   } catch {
     // ignore pause failures during logout
   }
+  state.youtube.ad.retrySeq += 1;
+  clearHeuristicAdState({ unmute: true });
   state.youtube.isPlaying = false;
   state.youtube.currentEntryId = "";
   state.youtube.currentVideoId = "";
   state.youtube.currentTime = 0;
   state.youtube.duration = 0;
   state.youtube.seeking = false;
+  resetPlaybackQueue();
+  clearListModeHold();
+  state.list.mode = "ranked";
+  state.list.shuffleOrder = [];
+  state.list.openEntryMenuId = "";
   state.identity = null;
+  state.ui.appReady = false;
+  state.ui.appReadySeq += 1;
   localStorage.removeItem(STORAGE_SESSION);
   renderIdentity();
   renderWizard();
@@ -1337,9 +1618,11 @@ function recomputeSnapshotChoice() {
 }
 
 function renderList() {
+  renderListControls();
   el.list.replaceChildren();
   if (!state.identity) {
     renderMiniPlayer();
+    syncAppBootUi();
     return;
   }
   const rows = buildRows();
@@ -1349,13 +1632,86 @@ function renderList() {
     empty.textContent = "drop the first track";
     el.list.appendChild(empty);
     renderMiniPlayer();
+    requestAppBootRelease();
     return;
   }
   for (const row of rows) el.list.appendChild(renderRow(row));
+  syncCurrentPlaybackRowUi();
+  renderMiniPlayer();
+  requestAppBootRelease();
+}
+
+function syncAppBootUi() {
+  const booting = Boolean(state.identity && !state.ui.appReady);
+  el.appMain?.classList.toggle("booting", booting);
+  el.appBootOverlay?.classList.toggle("hidden", !booting);
+}
+
+function shouldHoldAppBoot() {
+  if (!state.identity) return false;
+  if (state.sharedCache.hydrating) return true;
+  const hasVisibleRows = Number(el.list?.childElementCount || 0) > 0;
+  return !hasVisibleRows && !state.synced;
+}
+
+function waitForFontsReady() {
+  if (!document.fonts?.ready) return Promise.resolve();
+  if (!state.ui.fontsReadyPromise) {
+    state.ui.fontsReadyPromise = Promise.race([
+      Promise.resolve(document.fonts.ready).catch(() => undefined),
+      new Promise((resolve) => window.setTimeout(resolve, 1400)),
+    ]).then(() => undefined);
+  }
+  return state.ui.fontsReadyPromise;
+}
+
+function waitForNextPaint() {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+}
+
+function requestAppBootRelease() {
+  if (!state.identity) {
+    syncAppBootUi();
+    return;
+  }
+  if (state.ui.appReady) {
+    syncAppBootUi();
+    return;
+  }
+  syncAppBootUi();
+  if (shouldHoldAppBoot()) return;
+  const seq = ++state.ui.appReadySeq;
+  void (async () => {
+    await waitForFontsReady();
+    await waitForNextPaint();
+    await waitForNextPaint();
+    if (seq !== state.ui.appReadySeq) return;
+    if (!state.identity || shouldHoldAppBoot()) return;
+    state.ui.appReady = true;
+    syncAppBootUi();
+  })();
+}
+
+function syncCurrentPlaybackRowUi() {
+  const currentEntryId = cleanEntryId(state.youtube.currentEntryId || "");
+  const shouldMarkPlaying = Boolean(currentEntryId && state.youtube.isPlaying);
+  el.list?.querySelectorAll(".item.item-playing").forEach((node) => {
+    if (!(node instanceof HTMLElement)) return;
+    if (!shouldMarkPlaying || node.dataset.entryId !== currentEntryId) {
+      node.classList.remove("item-playing");
+    }
+  });
+  if (!shouldMarkPlaying) return;
+  const currentNode = document.getElementById(entryDomId(currentEntryId));
+  currentNode?.classList.add("item-playing");
+}
+
+function renderPlaybackUi() {
+  syncCurrentPlaybackRowUi();
   renderMiniPlayer();
 }
 
-function buildRows({ includeHiddenRevoked = false } = {}) {
+function buildBaseRows({ includeHiddenRevoked = false } = {}) {
   const merged = new Map();
   for (const e of (state.snapshot ? state.snapshot.entries : DEFAULT_SNAPSHOT.map((x) => ({ ...x })))) merged.set(e.entry_id, e);
   for (const e of state.entries.values()) merged.set(e.entry_id, e);
@@ -1372,11 +1728,9 @@ function buildRows({ includeHiddenRevoked = false } = {}) {
     const map = state.votes.get(e.entry_id) || new Map();
     let score = 0;
     let myVote = 0;
-    const upvoters = [];
     for (const [pk, v] of map.entries()) {
       if (activeBanForPubkey(pk)) continue;
       score += v.value;
-      if (v.value > 0) upvoters.push(v.user || resolveName(pk));
       if (state.identity && pk === state.identity.pubkey) myVote = v.value;
     }
     out.push({
@@ -1386,22 +1740,81 @@ function buildRows({ includeHiddenRevoked = false } = {}) {
       revoked,
       score,
       myVote,
-      upvoters: uniqNames(upvoters),
     });
   }
-
-  out.sort((a, b) => (b.score !== a.score ? b.score - a.score : b.created_at !== a.created_at ? b.created_at - a.created_at : a.title.localeCompare(b.title)));
   return out;
+}
+
+function compareRankedRows(a, b) {
+  return b.score !== a.score ? b.score - a.score : a.created_at !== b.created_at ? a.created_at - b.created_at : a.title.localeCompare(b.title);
+}
+
+function compareRecentRows(a, b) {
+  return b.created_at !== a.created_at ? b.created_at - a.created_at : b.score !== a.score ? b.score - a.score : a.title.localeCompare(b.title);
+}
+
+function shuffleIds(ids, avoidFirstId = "") {
+  const out = ids.filter((id) => cleanEntryId(id));
+  for (let index = out.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [out[index], out[swapIndex]] = [out[swapIndex], out[index]];
+  }
+  const blockedId = cleanEntryId(avoidFirstId || "");
+  if (blockedId && out.length > 1 && out[0] === blockedId) {
+    const swapIndex = 1 + Math.floor(Math.random() * (out.length - 1));
+    [out[0], out[swapIndex]] = [out[swapIndex], out[0]];
+  }
+  return out;
+}
+
+function reconcileShuffleOrder(rows) {
+  const visibleIds = rows.map((row) => row.entry_id);
+  const visibleSet = new Set(visibleIds);
+  state.list.shuffleOrder = state.list.shuffleOrder.filter((id) => visibleSet.has(id));
+  const have = new Set(state.list.shuffleOrder);
+  const missing = visibleIds.filter((id) => !have.has(id));
+  if (missing.length > 0) {
+    state.list.shuffleOrder.push(...shuffleIds(missing));
+  }
+}
+
+function rowsForMode(rows, mode) {
+  const cleanMode = LIST_MODE_CYCLE.includes(mode) ? mode : "ranked";
+  const out = [...rows];
+  if (cleanMode === "recent") {
+    out.sort(compareRecentRows);
+    return out;
+  }
+  if (cleanMode === "shuffle") {
+    reconcileShuffleOrder(out);
+    const byId = new Map(out.map((row) => [row.entry_id, row]));
+    return state.list.shuffleOrder.map((id) => byId.get(id)).filter(Boolean);
+  }
+  out.sort(compareRankedRows);
+  return out;
+}
+
+function buildRows({ includeHiddenRevoked = false, mode = state.list.mode } = {}) {
+  return rowsForMode(buildBaseRows({ includeHiddenRevoked }), mode);
 }
 
 function renderRow(r) {
   const item = document.createElement("article");
+  const isCurrentPlaying = state.youtube.currentEntryId === r.entry_id && state.youtube.isPlaying;
+  const canRowPlay = Boolean(r.youtube_id && !r.revoked && !r.owner_banned);
   item.className = r.revoked ? "item revoked" : "item";
   item.id = entryDomId(r.entry_id);
   item.dataset.entryId = r.entry_id;
+  if (canRowPlay) item.classList.add("item-clickable");
+  if (isCurrentPlaying) item.classList.add("item-playing");
 
   const main = document.createElement("div");
   main.className = "item-main";
+  const copy = document.createElement("div");
+  copy.className = "item-copy";
+  const shell = document.createElement("div");
+  shell.className = "item-shell";
+  item.appendChild(renderItemSwipeUnderlay());
   const titleLine = document.createElement("div");
   titleLine.className = "title-line";
   const artistLine = document.createElement("div");
@@ -1417,6 +1830,10 @@ function renderRow(r) {
     title.href = songUrl;
     title.target = "_blank";
     title.rel = "noopener noreferrer";
+    title.addEventListener("click", (event) => {
+      event.stopPropagation();
+      closeEntryOverflow();
+    });
   }
   const artist = document.createElement("span");
   artist.className = "artist";
@@ -1428,24 +1845,16 @@ function renderRow(r) {
   author.textContent = `@${resolvedName}${r.owner_banned ? " [banned]" : ""}`;
   if (r.owner_pubkey) {
     author.classList.add("clickable");
-    author.addEventListener("click", () => openUserModal(r.owner_pubkey, resolvedName, r));
+    author.addEventListener("click", (event) => {
+      event.stopPropagation();
+      closeEntryOverflow();
+      openUserModal(r.owner_pubkey, resolvedName, r);
+    });
   } else {
     author.disabled = true;
   }
 
-  if (r.youtube_id) {
-    const play = document.createElement("button");
-    play.type = "button";
-    const active = state.youtube.currentEntryId === r.entry_id && state.youtube.isPlaying;
-    play.className = active ? "play-btn active" : "play-btn";
-    play.title = active ? "pause" : "play";
-    play.setAttribute("aria-label", active ? "pause" : "play");
-    play.appendChild(createPlayPauseIcon(active));
-    play.addEventListener("click", () => void onPlayToggle(r.entry_id, r.youtube_id));
-    titleLine.appendChild(play);
-  }
-
-  titleLine.prepend(title);
+  titleLine.append(title);
   artistLine.appendChild(artist);
   metaLine.append(author);
   if (r.revoked) {
@@ -1454,38 +1863,35 @@ function renderRow(r) {
     deleted.textContent = "deleted";
     metaLine.append(deleted);
   }
-  const canEdit = Boolean(state.identity && canPubkeyModerateEntry(state.identity.pubkey, r.entry_id));
-  if (canEdit) {
-    const edit = document.createElement("button");
-    edit.type = "button";
-    edit.className = "item-edit-btn";
-    edit.title = "edit song";
-    edit.setAttribute("aria-label", "edit song");
-    edit.appendChild(createEditIcon());
-    edit.addEventListener("click", (event) => {
+  copy.append(titleLine, artistLine, metaLine);
+  main.append(copy);
+
+  if (songUrl && r.youtube_id) {
+    const thumbLink = document.createElement("a");
+    thumbLink.className = "item-thumb";
+    thumbLink.href = songUrl;
+    thumbLink.target = "_blank";
+    thumbLink.rel = "noopener noreferrer";
+    thumbLink.setAttribute("aria-label", `${r.title} on YouTube`);
+    thumbLink.addEventListener("click", (event) => {
       event.stopPropagation();
-      openEditModal(r);
+      closeEntryOverflow();
     });
-    titleLine.appendChild(edit);
-  }
-  if (isAdminMe() && !r.revoked) {
-    const del = document.createElement("button");
-    del.type = "button";
-    del.className = "item-delete-btn";
-    del.title = "delete song";
-    del.setAttribute("aria-label", "delete song");
-    del.appendChild(createTrashIcon());
-    del.addEventListener("click", (event) => {
-      event.stopPropagation();
-      openDeleteConfirm(r);
-    });
-    titleLine.appendChild(del);
+    const thumbImg = document.createElement("img");
+    thumbImg.src = `https://i.ytimg.com/vi/${r.youtube_id}/hqdefault.jpg`;
+    thumbImg.alt = "";
+    thumbImg.loading = "lazy";
+    thumbLink.appendChild(thumbImg);
+    shell.appendChild(thumbLink);
+  } else {
+    item.classList.add("item-no-thumb");
   }
 
-  const ups = document.createElement("div");
-  ups.className = "upvoters";
-  ups.textContent = r.upvoters.join(" · ");
-  main.append(titleLine, artistLine, metaLine, ups);
+  const canEdit = Boolean(state.identity && canPubkeyModerateEntry(state.identity.pubkey, r.entry_id));
+  const canDelete = Boolean(isAdminMe() && !r.revoked);
+  const controls = document.createElement("div");
+  controls.className = "item-controls";
+  if (canEdit || canDelete) controls.appendChild(renderEntryOverflow(r, { canEdit, canDelete }));
 
   const vs = document.createElement("div");
   vs.className = "vote-stack";
@@ -1498,7 +1904,11 @@ function renderRow(r) {
   up.setAttribute("aria-label", "upvote");
   up.appendChild(createVoteIcon("up"));
   up.disabled = !state.identity || Boolean(activeBanForPubkey(state.identity?.pubkey || ""));
-  up.addEventListener("click", () => void castVote(r.entry_id, 1));
+  up.addEventListener("click", (event) => {
+    event.stopPropagation();
+    closeEntryOverflow(false);
+    void castVote(r.entry_id, 1);
+  });
 
   const down = document.createElement("button");
   down.type = "button";
@@ -1506,16 +1916,240 @@ function renderRow(r) {
   down.setAttribute("aria-label", "downvote");
   down.appendChild(createVoteIcon("down"));
   down.disabled = !state.identity || Boolean(activeBanForPubkey(state.identity?.pubkey || ""));
-  down.addEventListener("click", () => void castVote(r.entry_id, -1));
+  down.addEventListener("click", (event) => {
+    event.stopPropagation();
+    closeEntryOverflow(false);
+    void castVote(r.entry_id, -1);
+  });
 
   vb.append(up, down);
   const score = document.createElement("div");
   score.className = "score";
   score.textContent = String(r.score);
   vs.append(vb, score);
+  controls.append(vs);
 
-  item.append(main, vs);
+  if (canRowPlay) {
+    item.addEventListener("click", () => {
+      if (state.youtube.currentEntryId === r.entry_id && state.youtube.isPlaying) return;
+      void onRowPlay(r);
+    });
+  }
+  bindItemSwipeVote(item, r);
+
+  shell.append(main, controls);
+  item.append(shell);
   return item;
+}
+
+function renderItemSwipeUnderlay() {
+  const underlay = document.createElement("div");
+  underlay.className = "item-swipe-underlay";
+
+  const upvoteZone = document.createElement("div");
+  upvoteZone.className = "item-swipe-zone item-swipe-upvote";
+  const upvoteIcon = document.createElement("div");
+  upvoteIcon.className = "item-swipe-icon";
+  upvoteIcon.appendChild(createVoteIcon("up"));
+  upvoteZone.appendChild(upvoteIcon);
+
+  const downvoteZone = document.createElement("div");
+  downvoteZone.className = "item-swipe-zone item-swipe-downvote";
+  const downvoteIcon = document.createElement("div");
+  downvoteIcon.className = "item-swipe-icon";
+  downvoteIcon.appendChild(createVoteIcon("down"));
+  downvoteZone.appendChild(downvoteIcon);
+
+  underlay.append(upvoteZone, downvoteZone);
+  return underlay;
+}
+
+function setItemSwipeVisual(node, shiftPx = 0, direction = 0, armed = false) {
+  const width = Math.max(1, node.clientWidth || 1);
+  const threshold = swipeTriggerDistance(width);
+  const progress = Math.min(Math.abs(shiftPx) / threshold, 1);
+  node.style.setProperty("--swipe-shift", `${shiftPx}px`);
+  node.style.setProperty("--swipe-right-progress", direction > 0 ? String(progress) : "0");
+  node.style.setProperty("--swipe-left-progress", direction < 0 ? String(progress) : "0");
+  node.classList.toggle("swiping", Math.abs(shiftPx) > 0.5);
+  node.classList.toggle("swipe-right", direction > 0 && Math.abs(shiftPx) > 0.5);
+  node.classList.toggle("swipe-left", direction < 0 && Math.abs(shiftPx) > 0.5);
+  node.classList.toggle("swipe-armed", armed);
+}
+
+function bindItemSwipeVote(node, row) {
+  if (!node || !row || !isTouchLikeDevice()) return;
+  let pointerId = null;
+  let startX = 0;
+  let startY = 0;
+  let moved = false;
+  let swipeHandled = false;
+  let shouldSuppressClick = false;
+  let thresholdBuzzed = false;
+
+  node.addEventListener("pointerdown", (event) => {
+    if (event.pointerType && event.pointerType !== "touch") return;
+    const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest("a, button, input, textarea, select, label")) return;
+    pointerId = event.pointerId;
+    startX = event.clientX;
+    startY = event.clientY;
+    moved = false;
+    swipeHandled = false;
+    shouldSuppressClick = false;
+    thresholdBuzzed = false;
+    setItemSwipeVisual(node);
+  });
+
+  node.addEventListener("pointermove", (event) => {
+    if (pointerId !== event.pointerId) return;
+    const dx = event.clientX - startX;
+    const dy = event.clientY - startY;
+    if (Math.abs(dx) > 8 || Math.abs(dy) > 8) moved = true;
+    if (Math.abs(dx) <= Math.abs(dy) * 1.1) {
+      setItemSwipeVisual(node);
+      return;
+    }
+    shouldSuppressClick = true;
+    const direction = dx > 0 ? 1 : -1;
+    if ((direction > 0 && row.myVote > 0) || (direction < 0 && row.myVote < 0)) {
+      setItemSwipeVisual(node);
+      return;
+    }
+    const threshold = swipeTriggerDistance(node.clientWidth);
+    const shift = Math.max(-threshold, Math.min(threshold, dx));
+    const armed = Math.abs(shift) >= threshold - 0.5;
+    if (armed && !thresholdBuzzed) {
+      thresholdBuzzed = true;
+      triggerHapticPulse();
+    } else if (!armed) {
+      thresholdBuzzed = false;
+    }
+    setItemSwipeVisual(node, shift, direction, armed);
+  });
+
+  node.addEventListener("pointerup", (event) => {
+    if (pointerId !== event.pointerId) return;
+    pointerId = null;
+    const dx = event.clientX - startX;
+    const dy = event.clientY - startY;
+    setItemSwipeVisual(node);
+    if (!moved || Math.abs(dx) < Math.abs(dy) * 1.2) return;
+    const nextVote = dx > 0 ? 1 : -1;
+    if (row.myVote === nextVote) return;
+    const threshold = swipeTriggerDistance(node.clientWidth);
+    if (Math.abs(dx) < threshold) return;
+    swipeHandled = true;
+    node.dataset.swipeJustVoted = "1";
+    window.setTimeout(() => {
+      if (node.dataset.swipeJustVoted === "1") delete node.dataset.swipeJustVoted;
+    }, 220);
+    void castVote(row.entry_id, nextVote);
+  });
+
+  node.addEventListener("pointercancel", () => {
+    pointerId = null;
+    moved = false;
+    swipeHandled = false;
+    shouldSuppressClick = false;
+    thresholdBuzzed = false;
+    setItemSwipeVisual(node);
+  });
+
+  node.addEventListener("click", (event) => {
+    if (swipeHandled || shouldSuppressClick || node.dataset.swipeJustVoted === "1") {
+      swipeHandled = false;
+      shouldSuppressClick = false;
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  }, true);
+}
+
+function renderEntryOverflow(row, { canEdit, canDelete }) {
+  const wrap = document.createElement("div");
+  wrap.className = state.list.openEntryMenuId === row.entry_id ? "item-overflow open" : "item-overflow";
+  wrap.dataset.entryId = row.entry_id;
+
+  const rail = document.createElement("div");
+  rail.className = "item-action-rail";
+
+  if (canEdit) {
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.className = "item-action-btn item-edit-btn";
+    edit.title = "edit song";
+    edit.setAttribute("aria-label", "edit song");
+    edit.appendChild(createEditIcon());
+    edit.addEventListener("click", (event) => {
+      event.stopPropagation();
+      closeEntryOverflow();
+      openEditModal(row);
+    });
+    rail.appendChild(edit);
+  }
+
+  if (canDelete) {
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "item-action-btn item-delete-btn";
+    del.title = "delete song";
+    del.setAttribute("aria-label", "delete song");
+    del.appendChild(createTrashIcon());
+    del.addEventListener("click", (event) => {
+      event.stopPropagation();
+      closeEntryOverflow();
+      openDeleteConfirm(row);
+    });
+    rail.appendChild(del);
+  }
+
+  const more = document.createElement("button");
+  more.type = "button";
+  more.className = "item-more-btn";
+  more.title = wrap.classList.contains("open") ? "close actions" : "song actions";
+  more.setAttribute("aria-label", wrap.classList.contains("open") ? "close song actions" : "song actions");
+  more.appendChild(createMoreIcon());
+  more.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleEntryOverflow(row.entry_id);
+  });
+
+  wrap.append(rail, more);
+  return wrap;
+}
+
+function syncEntryOverflowUi() {
+  document.querySelectorAll(".item-overflow").forEach((wrap) => {
+    const entryId = cleanEntryId(wrap.getAttribute("data-entry-id") || "");
+    const isOpen = Boolean(entryId) && state.list.openEntryMenuId === entryId;
+    wrap.classList.toggle("open", isOpen);
+    const more = wrap.querySelector(".item-more-btn");
+    if (more instanceof HTMLButtonElement) {
+      more.title = isOpen ? "close actions" : "song actions";
+      more.setAttribute("aria-label", isOpen ? "close song actions" : "song actions");
+    }
+  });
+}
+
+function toggleEntryOverflow(entry_id) {
+  const cleanId = cleanEntryId(entry_id || "");
+  if (!cleanId) return;
+  state.list.openEntryMenuId = state.list.openEntryMenuId === cleanId ? "" : cleanId;
+  syncEntryOverflowUi();
+}
+
+function closeEntryOverflow(render = false) {
+  if (!state.list.openEntryMenuId) return;
+  state.list.openEntryMenuId = "";
+  if (render) queueRender();
+  else syncEntryOverflowUi();
+}
+
+function onRowPlay(row) {
+  if (!row?.youtube_id) return;
+  closeEntryOverflow(false);
+  void onPlayToggle(row.entry_id, row.youtube_id, { captureQueue: true, toggleSame: false });
 }
 
 function createTrashIcon() {
@@ -1526,6 +2160,49 @@ function createTrashIcon() {
   svg.setAttribute("focusable", "false");
   const path = document.createElementNS(ns, "path");
   path.setAttribute("d", "M9 3h6l1 2h4v2H4V5h4l1-2zm-2 6h2v9H7V9zm4 0h2v9h-2V9zm4 0h2v9h-2V9zM6 7h12l-1 14H7L6 7z");
+  svg.appendChild(path);
+  return svg;
+}
+
+function createMoreIcon() {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+  for (const cy of [5, 12, 19]) {
+    const circle = document.createElementNS(ns, "circle");
+    circle.setAttribute("cx", "12");
+    circle.setAttribute("cy", String(cy));
+    circle.setAttribute("r", "1.8");
+    svg.appendChild(circle);
+  }
+  return svg;
+}
+
+function createListModeButtonContent(mode, label) {
+  const frag = document.createDocumentFragment();
+  frag.appendChild(createListModeIcon(mode));
+  const text = document.createElement("span");
+  text.textContent = label;
+  frag.appendChild(text);
+  return frag;
+}
+
+function createListModeIcon(mode) {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+  const path = document.createElementNS(ns, "path");
+  if (mode === "recent") {
+    path.setAttribute("d", "M12 4a8 8 0 1 0 7.75 10H17.6a6 6 0 1 1-1.14-5.3L14 11h6V5l-2.12 2.12A7.96 7.96 0 0 0 12 4zm-1 3h2v5.2l3 1.8-1 1.74-4-2.4V7z");
+  } else if (mode === "shuffle") {
+    path.setAttribute("d", "M17 3h4v4h-2V6h-2.1l-4.35 4.35-1.4-1.4L15.49 5H13V3h4zm-10 2 3.44 3.44-1.4 1.41L5.6 6.4H3V4h4zm10 10h4v4h-2v-1h-2l-4.45-4.45 1.4-1.41L17.49 16H19v-1zm-10 0 2.04 2.04-1.4 1.41L7 18H3v-2h4z");
+  } else {
+    path.setAttribute("d", "M5 6h14v2H5V6zm3 5h11v2H8v-2zm4 5h7v2h-7v-2z");
+  }
   svg.appendChild(path);
   return svg;
 }
@@ -1759,7 +2436,7 @@ function parseEntryFields(titleRaw, artistRaw, youtubeRawInput, { titleEl, artis
 
 function findDuplicateEntry(fields, { includeHiddenRevoked = false } = {}) {
   if (!fields || typeof fields !== "object") return null;
-  const rows = buildRows({ includeHiddenRevoked });
+  const rows = buildBaseRows({ includeHiddenRevoked });
   const youtube_id = cleanYouTubeId(fields.youtube_id || "");
   const title = cleanText(fields.title || "", 120);
   const artist = cleanText(fields.artist || "", 120);
@@ -2239,7 +2916,7 @@ async function onPublishSnapshot() {
 }
 
 function buildSnapshotPayload(version_ts) {
-  const entries = buildRows()
+  const entries = buildRows({ mode: "ranked" })
     .filter((r) => !r.revoked)
     .map((r) => ({
       entry_id: r.entry_id,
@@ -2475,18 +3152,56 @@ function cacheRecoveryDoc(doc) {
   }
 }
 
-async function onPlayToggle(entry_id, youtube_id) {
-  await playYouTubeEntry(entry_id, youtube_id, { toggleSame: true });
+async function onPlayToggle(entry_id, youtube_id, { toggleSame = true, captureQueue = false } = {}) {
+  await playYouTubeEntry(entry_id, youtube_id, { toggleSame, captureQueue });
 }
 
-function playableRowsByRank() {
-  return buildRows().filter((r) => r && r.youtube_id && !r.revoked && !r.owner_banned);
+function isPlayableRow(row) {
+  return Boolean(row && row.youtube_id && !row.revoked && !row.owner_banned);
+}
+
+function resetPlaybackQueue() {
+  state.youtube.queue.mode = state.list.mode;
+  state.youtube.queue.entryIds = [];
+  state.youtube.queue.index = -1;
+  state.youtube.queue.capturedAt = 0;
+  state.youtube.queue.shuffleSeedIds = [];
+}
+
+function rotateIdsToStart(ids, startEntryId) {
+  const cleanStart = cleanEntryId(startEntryId || "");
+  if (!cleanStart || ids.length === 0) return [...ids];
+  const index = ids.indexOf(cleanStart);
+  if (index < 0) return [...ids];
+  return [...ids.slice(index), ...ids.slice(0, index)];
+}
+
+function capturePlaybackQueue(startEntryId) {
+  const rows = buildRows({ mode: state.list.mode });
+  const playableIds = rows.filter((row) => isPlayableRow(row)).map((row) => row.entry_id);
+  if (playableIds.length === 0) {
+    resetPlaybackQueue();
+    return false;
+  }
+  const rotated = rotateIdsToStart(playableIds, startEntryId);
+  state.youtube.queue.mode = state.list.mode;
+  state.youtube.queue.entryIds = rotated;
+  state.youtube.queue.index = 0;
+  state.youtube.queue.capturedAt = nowSec();
+  state.youtube.queue.shuffleSeedIds = state.list.mode === "shuffle" ? [...playableIds] : [];
+  return true;
+}
+
+function ensurePlaybackQueue(seedEntryId = "") {
+  if (state.youtube.queue.entryIds.length > 0) return true;
+  const fallbackId = cleanEntryId(seedEntryId || state.youtube.currentEntryId || "");
+  return capturePlaybackQueue(fallbackId);
 }
 
 function rowForCurrentPlayback() {
   const entryId = cleanEntryId(state.youtube.currentEntryId || "");
   const videoId = cleanYouTubeId(state.youtube.currentVideoId || "");
-  const rows = buildRows({ includeHiddenRevoked: true });
+  const rows = buildBaseRows({ includeHiddenRevoked: true });
   if (entryId) {
     const byEntry = rows.find((r) => r.entry_id === entryId && r.youtube_id);
     if (byEntry) return byEntry;
@@ -2498,40 +3213,220 @@ function rowForCurrentPlayback() {
   return null;
 }
 
-function nextPlayableRowAfter(entry_id) {
-  const rows = playableRowsByRank();
-  if (rows.length === 0) return null;
-  const currentId = cleanEntryId(entry_id || "");
-  if (!currentId) return rows[0];
-  const idx = rows.findIndex((r) => r.entry_id === currentId);
-  if (idx < 0) return rows[0];
-  if (idx + 1 < rows.length) return rows[idx + 1];
+function resolvePlayableRowByEntryId(entry_id) {
+  const cleanId = cleanEntryId(entry_id || "");
+  if (!cleanId) return null;
+  const row = buildBaseRows({ includeHiddenRevoked: true }).find((candidate) => candidate.entry_id === cleanId);
+  return isPlayableRow(row) ? row : null;
+}
+
+function clonePlaybackQueue(queue = state.youtube.queue) {
+  return {
+    mode: queue?.mode || "ranked",
+    entryIds: Array.isArray(queue?.entryIds) ? [...queue.entryIds] : [],
+    index: Number.isInteger(queue?.index) ? queue.index : -1,
+    capturedAt: unixOr(queue?.capturedAt, 0),
+    shuffleSeedIds: Array.isArray(queue?.shuffleSeedIds) ? [...queue.shuffleSeedIds] : [],
+  };
+}
+
+function appendShuffleQueuePass(queue, lastEntryId = "") {
+  const targetQueue = queue || state.youtube.queue;
+  const seeds = targetQueue.shuffleSeedIds.filter((id) => cleanEntryId(id));
+  if (seeds.length === 0) return false;
+  const nextPass = shuffleIds(seeds, lastEntryId);
+  if (nextPass.length === 0) return false;
+  targetQueue.entryIds.push(...nextPass);
+  return true;
+}
+
+function findQueuedTargetInQueue(queue, direction) {
+  if (queue.entryIds.length === 0) return null;
+
+  const maxAttempts = Math.max(queue.entryIds.length + queue.shuffleSeedIds.length + 2, 4);
+  let cursor = queue.index >= 0 ? queue.index : 0;
+  let attempts = 0;
+
+  while (attempts < maxAttempts) {
+    if (direction < 0) {
+      cursor = cursor <= 0 ? queue.entryIds.length - 1 : cursor - 1;
+    } else {
+      if (cursor + 1 >= queue.entryIds.length) {
+        if (queue.mode === "shuffle") {
+          if (!appendShuffleQueuePass(queue, queue.entryIds[cursor] || state.youtube.currentEntryId)) return null;
+        } else {
+          cursor = -1;
+        }
+      }
+      cursor += 1;
+    }
+    const row = resolvePlayableRowByEntryId(queue.entryIds[cursor]);
+    if (row) {
+      return { row, index: cursor };
+    }
+    attempts += 1;
+  }
   return null;
 }
 
-function prevPlayableRowBefore(entry_id) {
-  const rows = playableRowsByRank();
-  if (rows.length === 0) return null;
-  const currentId = cleanEntryId(entry_id || "");
-  if (!currentId) return rows[0];
-  const idx = rows.findIndex((r) => r.entry_id === currentId);
-  if (idx <= 0) return null;
-  return rows[idx - 1];
+function findQueuedTarget(direction) {
+  if (!ensurePlaybackQueue()) return null;
+  return findQueuedTargetInQueue(state.youtube.queue, direction);
 }
 
-async function playYouTubeEntry(entry_id, youtube_id, { toggleSame = true } = {}) {
+function previewQueuedTarget(direction) {
+  if (!ensurePlaybackQueue()) return null;
+  return findQueuedTargetInQueue(clonePlaybackQueue(state.youtube.queue), direction);
+}
+
+function stopHeuristicAdWatch() {
+  if (state.youtube.ad.watchTimer) {
+    clearInterval(state.youtube.ad.watchTimer);
+    state.youtube.ad.watchTimer = 0;
+  }
+}
+
+function setHeuristicAdState(active, targetVideoId = "", { pending = state.youtube.ad.pending } = {}) {
+  const nextActive = Boolean(active);
+  const nextPending = Boolean(pending);
+  const nextVideoId = cleanYouTubeId(targetVideoId || "");
+  const changed = state.youtube.ad.active !== nextActive
+    || state.youtube.ad.pending !== nextPending
+    || state.youtube.ad.lastTargetVideoId !== nextVideoId;
+  state.youtube.ad.active = nextActive;
+  state.youtube.ad.pending = nextPending;
+  state.youtube.ad.lastTargetVideoId = nextVideoId;
+  if (changed) renderMiniPlayer();
+}
+
+function clearHeuristicAdState({ unmute = false } = {}) {
+  stopHeuristicAdWatch();
+  const player = state.youtube.player;
+  if (unmute && player && state.youtube.ad.muted) {
+    try {
+      player.unMute?.();
+    } catch {
+      // ignore player unmute failures
+    }
+  }
+  state.youtube.ad.muted = false;
+  setHeuristicAdState(false, "", { pending: false });
+}
+
+function isHeuristicAdLocked() {
+  return Boolean(state.youtube.ad.pending || state.youtube.ad.active);
+}
+
+function resetCurrentPlayback({ resetQueue = false, unmute = true } = {}) {
+  stopYouTubeProgressTicker();
+  state.youtube.ad.retrySeq += 1;
+  clearHeuristicAdState({ unmute });
+  state.youtube.isPlaying = false;
+  state.youtube.currentEntryId = "";
+  state.youtube.currentVideoId = "";
+  state.youtube.currentTime = 0;
+  state.youtube.duration = 0;
+  state.youtube.seeking = false;
+  if (resetQueue) resetPlaybackQueue();
+  updateMiniProgressUi();
+}
+
+function currentPlayerVideoId() {
+  const player = state.youtube.player;
+  if (!player) return "";
+  try {
+    const dataId = cleanYouTubeId(player.getVideoData?.()?.video_id || "");
+    if (dataId) return dataId;
+  } catch {
+    // ignore
+  }
+  try {
+    return cleanYouTubeId(player.getVideoUrl?.() || "");
+  } catch {
+    return "";
+  }
+}
+
+function looksLikeTargetPlayback(player, youtube_id) {
+  try {
+    const states = window.YT?.PlayerState;
+    const current = Number(player.getCurrentTime?.() || 0);
+    const currentVideoId = currentPlayerVideoId();
+    const stateCode = Number(player.getPlayerState?.() || -999);
+    if (states && stateCode !== states.PLAYING) return false;
+    if (current <= 0.2) return false;
+    if (currentVideoId && currentVideoId !== youtube_id) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function waitMs(ms) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+async function attemptYouTubePlaybackHeuristic(player, youtube_id) {
+  const seq = ++state.youtube.ad.retrySeq;
+  clearHeuristicAdState();
+  setHeuristicAdState(false, youtube_id, { pending: true });
+
+  for (let attempt = 0; attempt < 7; attempt += 1) {
+    if (seq !== state.youtube.ad.retrySeq || state.youtube.currentVideoId !== youtube_id) return;
+    try {
+      if (attempt > 0) {
+        player.loadVideoById(youtube_id);
+      }
+      player.playVideo?.();
+    } catch {
+      // keep trying
+    }
+    await waitMs(280);
+    if (seq !== state.youtube.ad.retrySeq || state.youtube.currentVideoId !== youtube_id) return;
+    if (looksLikeTargetPlayback(player, youtube_id)) {
+      clearHeuristicAdState({ unmute: true });
+      return;
+    }
+  }
+
+  if (seq !== state.youtube.ad.retrySeq || state.youtube.currentVideoId !== youtube_id) return;
+  setHeuristicAdState(true, youtube_id, { pending: false });
+  try {
+    player.mute?.();
+    state.youtube.ad.muted = true;
+  } catch {
+    state.youtube.ad.muted = false;
+  }
+  stopHeuristicAdWatch();
+  state.youtube.ad.watchTimer = window.setInterval(() => {
+    if (seq !== state.youtube.ad.retrySeq || state.youtube.currentVideoId !== youtube_id) {
+      clearHeuristicAdState({ unmute: false });
+      return;
+    }
+    if (looksLikeTargetPlayback(player, youtube_id)) {
+      clearHeuristicAdState({ unmute: true });
+    }
+  }, 700);
+}
+
+async function playYouTubeEntry(entry_id, youtube_id, { toggleSame = true, captureQueue = false, queueIndex = null } = {}) {
   if (!youtube_id) return false;
+  const sameEntry = state.youtube.currentEntryId === entry_id;
+  const sameVideo = state.youtube.currentVideoId === youtube_id;
+  if (captureQueue && (!sameEntry || state.youtube.queue.entryIds.length === 0)) {
+    capturePlaybackQueue(entry_id);
+  }
   try {
     const player = await ensureYouTubePlayer(youtube_id);
-    const sameEntry = state.youtube.currentEntryId === entry_id;
-    const sameVideo = state.youtube.currentVideoId === youtube_id;
 
     if (toggleSame && sameEntry && state.youtube.isPlaying) {
       player.pauseVideo();
       state.youtube.isPlaying = false;
       stopYouTubeProgressTicker();
       void syncYouTubeProgressFromPlayer();
-      queueRender();
+      renderPlaybackUi();
       return true;
     }
 
@@ -2545,8 +3440,18 @@ async function playYouTubeEntry(entry_id, youtube_id, { toggleSame = true } = {}
     state.youtube.currentVideoId = youtube_id;
     state.youtube.isPlaying = true;
     state.youtube.currentTime = 0;
+    state.youtube.duration = 0;
+    if (Number.isInteger(queueIndex) && queueIndex >= 0) {
+      state.youtube.queue.index = queueIndex;
+    } else if (state.youtube.queue.entryIds.length > 0) {
+      const resolvedIndex = state.youtube.queue.entryIds.lastIndexOf(cleanEntryId(entry_id));
+      if (resolvedIndex >= 0) {
+        state.youtube.queue.index = resolvedIndex;
+      }
+    }
     startYouTubeProgressTicker();
-    queueRender();
+    void attemptYouTubePlaybackHeuristic(player, youtube_id);
+    renderPlaybackUi();
     return true;
   } catch (err) {
     console.error(err);
@@ -2556,21 +3461,21 @@ async function playYouTubeEntry(entry_id, youtube_id, { toggleSame = true } = {}
 }
 
 async function autoplayNextPopularAfter(currentEntryId) {
-  const next = nextPlayableRowAfter(currentEntryId);
+  if (!ensurePlaybackQueue(currentEntryId)) {
+    resetCurrentPlayback({ resetQueue: true });
+    renderPlaybackUi();
+    return;
+  }
+  const next = findQueuedTarget(1);
   if (!next) {
-    stopYouTubeProgressTicker();
-    state.youtube.isPlaying = false;
-    state.youtube.currentEntryId = "";
-    state.youtube.currentVideoId = "";
-    state.youtube.currentTime = 0;
-    state.youtube.duration = 0;
-    queueRender();
+    resetCurrentPlayback({ resetQueue: true });
+    renderPlaybackUi();
     return;
   }
 
-  const ok = await playYouTubeEntry(next.entry_id, next.youtube_id, { toggleSame: false });
+  const ok = await playYouTubeEntry(next.row.entry_id, next.row.youtube_id, { toggleSame: false, queueIndex: next.index });
   if (ok) {
-    setStatus(`autoplay next: ${next.title} - ${next.artist}`);
+    setStatus(`autoplay next: ${next.row.title} - ${next.row.artist}`);
   } else {
     setStatus("autoplay next failed");
   }
@@ -2578,37 +3483,256 @@ async function autoplayNextPopularAfter(currentEntryId) {
 
 async function onMiniPlayPause() {
   if (!state.identity) return;
+  if (isHeuristicAdLocked()) return;
   const current = rowForCurrentPlayback();
   if (current?.youtube_id) {
-    await playYouTubeEntry(current.entry_id, current.youtube_id, { toggleSame: true });
+    await playYouTubeEntry(current.entry_id, current.youtube_id, { toggleSame: true, captureQueue: false });
     return;
   }
-  const rows = playableRowsByRank();
+  const rows = buildRows({ mode: state.list.mode }).filter((row) => isPlayableRow(row));
   if (rows.length === 0) {
     showToast("No playable songs yet.", { kind: "info", timeoutMs: 1800 });
     return;
   }
-  await playYouTubeEntry(rows[0].entry_id, rows[0].youtube_id, { toggleSame: false });
+  await playYouTubeEntry(rows[0].entry_id, rows[0].youtube_id, { toggleSame: false, captureQueue: true });
 }
 
 async function onMiniNext() {
   if (!state.identity) return;
-  const rows = playableRowsByRank();
-  if (rows.length === 0) return;
-  const currentId = cleanEntryId(state.youtube.currentEntryId || "");
-  const idx = rows.findIndex((r) => r.entry_id === currentId);
-  const target = idx < 0 ? rows[0] : rows[(idx + 1) % rows.length];
-  await playYouTubeEntry(target.entry_id, target.youtube_id, { toggleSame: false });
+  const target = findQueuedTarget(1);
+  if (!target) return;
+  await playYouTubeEntry(target.row.entry_id, target.row.youtube_id, { toggleSame: false, queueIndex: target.index });
 }
 
 async function onMiniPrev() {
   if (!state.identity) return;
-  const rows = playableRowsByRank();
-  if (rows.length === 0) return;
-  const currentId = cleanEntryId(state.youtube.currentEntryId || "");
-  const idx = rows.findIndex((r) => r.entry_id === currentId);
-  const target = idx < 0 ? rows[0] : rows[(idx - 1 + rows.length) % rows.length];
-  await playYouTubeEntry(target.entry_id, target.youtube_id, { toggleSame: false });
+  const target = findQueuedTarget(-1);
+  if (!target) return;
+  await playYouTubeEntry(target.row.entry_id, target.row.youtube_id, { toggleSame: false, queueIndex: target.index });
+}
+
+function syncMiniSwipePreview(direction, row) {
+  const isPrev = direction < 0;
+  const iconHost = isPrev ? el.miniPrevPreviewIcon : el.miniNextPreviewIcon;
+  const thumb = isPrev ? el.miniPrevPreviewThumb : el.miniNextPreviewThumb;
+  const title = isPrev ? el.miniPrevPreviewTitle : el.miniNextPreviewTitle;
+  const artist = isPrev ? el.miniPrevPreviewArtist : el.miniNextPreviewArtist;
+  const zone = isPrev ? el.miniPrevPreview : el.miniNextPreview;
+  if (iconHost) {
+    iconHost.replaceChildren(createMiniControlIcon(isPrev ? "prev" : "next"));
+  }
+  if (title) title.textContent = row?.title || "";
+  if (artist) artist.textContent = row?.artist || "";
+  if (thumb) {
+    if (row?.youtube_id) {
+      setImageSource(thumb, `https://i.ytimg.com/vi/${row.youtube_id}/hqdefault.jpg`);
+      thumb.alt = "";
+      thumb.classList.remove("hidden");
+    } else {
+      setImageSource(thumb, "");
+      thumb.alt = "";
+      thumb.classList.add("hidden");
+    }
+  }
+  if (zone) zone.classList.toggle("empty", !row);
+}
+
+function setMiniSwipeVisual(shiftPx = 0, direction = 0, armed = false) {
+  const node = el.miniPlayer;
+  if (!node) return;
+  const width = Math.max(1, node.clientWidth || 1);
+  const threshold = swipeTriggerDistance(width);
+  const progress = Math.min(Math.abs(shiftPx) / threshold, 1);
+  node.style.setProperty("--swipe-shift", `${shiftPx}px`);
+  node.style.setProperty("--swipe-right-progress", direction > 0 ? String(progress) : "0");
+  node.style.setProperty("--swipe-left-progress", direction < 0 ? String(progress) : "0");
+  node.classList.toggle("swiping", Math.abs(shiftPx) > 0.5);
+  node.classList.toggle("swipe-right", direction > 0 && Math.abs(shiftPx) > 0.5);
+  node.classList.toggle("swipe-left", direction < 0 && Math.abs(shiftPx) > 0.5);
+  node.classList.toggle("swipe-armed", armed);
+}
+
+function isMiniPlayerBackgroundTarget(target) {
+  if (!(target instanceof Element)) return false;
+  return !target.closest(
+    "button, a, input, textarea, select, label, .mini-thumb-shell, .mini-top, .mini-controls-row, .mini-progress-row, .mini-progress-hitbox",
+  );
+}
+
+function scrollToCurrentPlaybackEntry() {
+  const entryId = cleanEntryId(state.youtube.currentEntryId || "");
+  if (!entryId) return;
+  scrollToEntry(entryId);
+}
+
+function bindMiniPlayerBackgroundLongPress(node) {
+  if (!node) return;
+  let pointerId = null;
+  let startX = 0;
+  let startY = 0;
+  let holdTimer = 0;
+  let holdTriggered = false;
+
+  const clearHold = () => {
+    if (holdTimer) {
+      clearTimeout(holdTimer);
+      holdTimer = 0;
+    }
+  };
+
+  node.addEventListener("pointerdown", (event) => {
+    const target = event.target instanceof Element ? event.target : null;
+    if (!isMiniPlayerBackgroundTarget(target)) return;
+    pointerId = event.pointerId;
+    startX = event.clientX;
+    startY = event.clientY;
+    holdTriggered = false;
+    clearHold();
+    holdTimer = window.setTimeout(() => {
+      holdTimer = 0;
+      if (pointerId !== event.pointerId) return;
+      holdTriggered = true;
+      triggerHapticPulse();
+      scrollToCurrentPlaybackEntry();
+    }, MINI_BACKGROUND_HOLD_MS);
+  });
+
+  node.addEventListener("pointermove", (event) => {
+    if (pointerId !== event.pointerId) return;
+    const dx = event.clientX - startX;
+    const dy = event.clientY - startY;
+    if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
+      clearHold();
+    }
+  });
+
+  node.addEventListener("pointerup", (event) => {
+    if (pointerId !== event.pointerId) return;
+    pointerId = null;
+    clearHold();
+    if (!holdTriggered) return;
+    holdTriggered = false;
+    event.preventDefault();
+    event.stopPropagation();
+  });
+
+  node.addEventListener("pointercancel", () => {
+    pointerId = null;
+    holdTriggered = false;
+    clearHold();
+  });
+
+  node.addEventListener("pointerleave", () => {
+    pointerId = null;
+    holdTriggered = false;
+    clearHold();
+  });
+
+  node.addEventListener("contextmenu", (event) => {
+    const target = event.target instanceof Element ? event.target : null;
+    if (!isMiniPlayerBackgroundTarget(target)) return;
+    event.preventDefault();
+  });
+}
+
+function onMiniPlayerBackgroundClick(event) {
+  const target = event.target instanceof Element ? event.target : null;
+  if (!isMiniPlayerBackgroundTarget(target)) return;
+  scrollToCurrentPlaybackEntry();
+}
+
+function bindMiniPlayerSwipe(node) {
+  if (!node) return;
+  let pointerId = null;
+  let startX = 0;
+  let startY = 0;
+  let swipeHandled = false;
+  let shouldSuppressClick = false;
+  let thresholdBuzzed = false;
+  let previewDirection = 0;
+
+  node.addEventListener("pointerdown", (event) => {
+    if (!isTouchLikeDevice()) return;
+    if (event.pointerType && event.pointerType !== "touch") return;
+    const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest("button, a, input, textarea, select, label, .mini-progress-hitbox")) return;
+    pointerId = event.pointerId;
+    startX = event.clientX;
+    startY = event.clientY;
+    swipeHandled = false;
+    shouldSuppressClick = false;
+    thresholdBuzzed = false;
+    previewDirection = 0;
+    setMiniSwipeVisual();
+  });
+
+  node.addEventListener("pointermove", (event) => {
+    if (pointerId !== event.pointerId) return;
+    const dx = event.clientX - startX;
+    const dy = event.clientY - startY;
+    if (Math.abs(dx) <= Math.abs(dy) * 1.1) {
+      previewDirection = 0;
+      setMiniSwipeVisual();
+      return;
+    }
+    const direction = dx < 0 ? 1 : -1;
+    const preview = previewQueuedTarget(direction);
+    if (!preview?.row) {
+      previewDirection = 0;
+      setMiniSwipeVisual();
+      return;
+    }
+    shouldSuppressClick = true;
+    if (previewDirection !== direction) {
+      syncMiniSwipePreview(direction, preview.row);
+      previewDirection = direction;
+    }
+    const threshold = swipeTriggerDistance(node.clientWidth);
+    const shift = Math.max(-threshold, Math.min(threshold, dx));
+    const armed = Math.abs(shift) >= threshold - 0.5;
+    if (armed && !thresholdBuzzed) {
+      thresholdBuzzed = true;
+      triggerHapticPulse();
+    } else if (!armed) {
+      thresholdBuzzed = false;
+    }
+    setMiniSwipeVisual(shift, dx > 0 ? 1 : -1, armed);
+  });
+
+  node.addEventListener("pointerup", (event) => {
+    if (pointerId !== event.pointerId) return;
+    pointerId = null;
+    const dx = event.clientX - startX;
+    const dy = event.clientY - startY;
+    setMiniSwipeVisual();
+    if (Math.abs(dx) < Math.abs(dy) * 1.2) return;
+    const direction = dx < 0 ? 1 : -1;
+    const preview = previewQueuedTarget(direction);
+    if (!preview?.row) return;
+    const threshold = swipeTriggerDistance(node.clientWidth);
+    if (Math.abs(dx) < threshold) return;
+    swipeHandled = true;
+    event.preventDefault();
+    if (dx < 0) void onMiniNext();
+    else void onMiniPrev();
+  });
+
+  node.addEventListener("pointercancel", () => {
+    pointerId = null;
+    swipeHandled = false;
+    shouldSuppressClick = false;
+    thresholdBuzzed = false;
+    previewDirection = 0;
+    setMiniSwipeVisual();
+  });
+
+  node.addEventListener("click", (event) => {
+    if (!swipeHandled && !shouldSuppressClick) return;
+    swipeHandled = false;
+    shouldSuppressClick = false;
+    event.preventDefault();
+    event.stopPropagation();
+  }, true);
 }
 
 function onMiniSeekInput(event) {
@@ -2667,10 +3791,91 @@ async function syncYouTubeProgressFromPlayer() {
     if (!state.youtube.seeking && Number.isFinite(currentRaw) && currentRaw >= 0) {
       state.youtube.currentTime = currentRaw;
     }
+    if (state.youtube.currentVideoId && looksLikeTargetPlayback(player, state.youtube.currentVideoId)) {
+      clearHeuristicAdState({ unmute: true });
+    }
     updateMiniProgressUi();
   } catch {
     // ignore polling failures
   }
+}
+
+function setImageSource(img, src) {
+  if (!(img instanceof HTMLImageElement)) return;
+  const nextSrc = String(src || "");
+  const currentSrc = img.getAttribute("src") || "";
+  if (!nextSrc) {
+    if (currentSrc) img.removeAttribute("src");
+    return;
+  }
+  if (currentSrc !== nextSrc) {
+    img.src = nextSrc;
+  }
+}
+
+function prefersReducedMotion() {
+  try {
+    return Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches);
+  } catch {
+    return false;
+  }
+}
+
+function clearMiniMarqueeLine(node) {
+  if (!(node instanceof HTMLElement)) return;
+  const timer = miniMarqueeTimers.get(node);
+  if (timer) {
+    cancelAnimationFrame(timer);
+    miniMarqueeTimers.delete(node);
+  }
+  node.style.transform = "";
+  node.style.removeProperty("--mini-marquee-offset");
+  node.parentElement?.classList.remove("marquee-active");
+}
+
+function startMiniMarqueeLine(node) {
+  if (!(node instanceof HTMLElement)) return;
+  const clip = node.parentElement;
+  if (!(clip instanceof HTMLElement) || !clip.classList.contains("mini-line-clip")) return;
+
+  clearMiniMarqueeLine(node);
+  if (prefersReducedMotion()) return;
+
+  const overflow = Math.ceil(node.scrollWidth - clip.clientWidth);
+  if (overflow <= 2 || clip.clientWidth <= 0) return;
+
+  clip.classList.add("marquee-active");
+  const moveMs = Math.max(1400, Math.round((overflow / MINI_MARQUEE_PX_PER_SEC) * 1000));
+  const cycleMs = MINI_MARQUEE_DELAY_MS + moveMs + MINI_MARQUEE_DELAY_MS;
+  const startedAt = (typeof performance !== "undefined" && typeof performance.now === "function") ? performance.now() : Date.now();
+
+  const tick = (now) => {
+    const timestamp = Number.isFinite(now) ? now : ((typeof performance !== "undefined" && typeof performance.now === "function") ? performance.now() : Date.now());
+    const elapsed = (timestamp - startedAt) % cycleMs;
+    let offset = 0;
+    if (elapsed > MINI_MARQUEE_DELAY_MS) {
+      if (elapsed < MINI_MARQUEE_DELAY_MS + moveMs) {
+        offset = -overflow * ((elapsed - MINI_MARQUEE_DELAY_MS) / moveMs);
+      } else {
+        offset = -overflow;
+      }
+    }
+    node.style.transform = `translate3d(${offset}px, 0, 0)`;
+    miniMarqueeTimers.set(node, requestAnimationFrame(tick));
+  };
+
+  miniMarqueeTimers.set(node, requestAnimationFrame(tick));
+}
+
+function scheduleMiniMarqueeSync() {
+  if (miniMarqueeRefreshFrame) {
+    cancelAnimationFrame(miniMarqueeRefreshFrame);
+  }
+  miniMarqueeRefreshFrame = requestAnimationFrame(() => {
+    miniMarqueeRefreshFrame = 0;
+    startMiniMarqueeLine(el.miniPlayerTitle);
+    startMiniMarqueeLine(el.miniPlayerArtist);
+  });
 }
 
 function renderMiniPlayer() {
@@ -2680,18 +3885,56 @@ function renderMiniPlayer() {
   const show = Boolean(row);
   host.classList.toggle("hidden", !show);
   document.body.classList.toggle("mini-player-visible", show);
-  if (!show) return;
+  if (!show) {
+    host.classList.remove("mini-ad-active");
+    setMiniSwipeVisual();
+    clearMiniMarqueeLine(el.miniPlayerTitle);
+    clearMiniMarqueeLine(el.miniPlayerArtist);
+    if (el.miniThumbImage) {
+      setImageSource(el.miniThumbImage, "");
+      el.miniThumbImage.alt = "";
+      el.miniThumbImage.parentElement?.classList.add("hidden");
+    }
+    syncMiniSwipePreview(-1, null);
+    syncMiniSwipePreview(1, null);
+    return;
+  }
+  const adLocked = isHeuristicAdLocked();
+  host.classList.toggle("mini-ad-active", adLocked);
   if (el.miniPlayerTitle) el.miniPlayerTitle.textContent = row.title || "Unknown title";
   if (el.miniPlayerArtist) el.miniPlayerArtist.textContent = row.artist || "Unknown artist";
+  if (el.miniThumbImage) {
+    const hasThumb = Boolean(row.youtube_id);
+    el.miniThumbImage.parentElement?.classList.toggle("hidden", !hasThumb);
+    if (hasThumb) {
+      setImageSource(el.miniThumbImage, `https://i.ytimg.com/vi/${row.youtube_id}/hqdefault.jpg`);
+      el.miniThumbImage.alt = "";
+    } else {
+      setImageSource(el.miniThumbImage, "");
+      el.miniThumbImage.alt = "";
+    }
+  }
+  syncMiniSwipePreview(-1, previewQueuedTarget(-1)?.row || null);
+  syncMiniSwipePreview(1, previewQueuedTarget(1)?.row || null);
   if (el.miniPrevBtn) {
     el.miniPrevBtn.replaceChildren(createMiniControlIcon("prev"));
     el.miniPrevBtn.setAttribute("aria-label", "previous");
     el.miniPrevBtn.title = "previous";
   }
   if (el.miniPlayPauseBtn) {
-    el.miniPlayPauseBtn.replaceChildren(createMiniControlIcon("playpause", state.youtube.isPlaying));
-    el.miniPlayPauseBtn.setAttribute("aria-label", state.youtube.isPlaying ? "pause" : "play");
-    el.miniPlayPauseBtn.title = state.youtube.isPlaying ? "pause" : "play";
+    if (adLocked) {
+      const adMark = document.createElement("span");
+      adMark.className = "mini-ad-mark";
+      adMark.textContent = "⛛";
+      el.miniPlayPauseBtn.replaceChildren(adMark);
+      const label = state.youtube.ad.pending ? "ad bypass in progress" : "ad in progress";
+      el.miniPlayPauseBtn.setAttribute("aria-label", label);
+      el.miniPlayPauseBtn.title = label;
+    } else {
+      el.miniPlayPauseBtn.replaceChildren(createMiniControlIcon("playpause", state.youtube.isPlaying));
+      el.miniPlayPauseBtn.setAttribute("aria-label", state.youtube.isPlaying ? "pause" : "play");
+      el.miniPlayPauseBtn.title = state.youtube.isPlaying ? "pause" : "play";
+    }
   }
   if (el.miniNextBtn) {
     el.miniNextBtn.replaceChildren(createMiniControlIcon("next"));
@@ -2699,6 +3942,7 @@ function renderMiniPlayer() {
     el.miniNextBtn.title = "next";
   }
   updateMiniProgressUi();
+  scheduleMiniMarqueeSync();
 }
 
 function updateMiniProgressUi() {
@@ -2809,9 +4053,8 @@ async function ensureYouTubePlayer(initialVideoId) {
           },
           onStateChange: onYouTubeStateChange,
           onError: () => {
-            state.youtube.isPlaying = false;
-            stopYouTubeProgressTicker();
-            queueRender();
+            resetCurrentPlayback();
+            renderPlaybackUi();
             setStatus("youtube playback failed");
           },
         },
@@ -2846,6 +4089,7 @@ function onYouTubeStateChange(event) {
     stopYouTubeProgressTicker();
     void syncYouTubeProgressFromPlayer();
   } else if (code === states.ENDED) {
+    clearHeuristicAdState({ unmute: true });
     stopYouTubeProgressTicker();
     state.youtube.currentTime = Math.max(state.youtube.currentTime, state.youtube.duration);
     updateMiniProgressUi();
@@ -2853,7 +4097,7 @@ function onYouTubeStateChange(event) {
     void autoplayNextPopularAfter(finishedEntryId);
     return;
   }
-  queueRender();
+  renderPlaybackUi();
 }
 
 async function signEvent(kind, tags, payload) {
@@ -3501,7 +4745,7 @@ function openUserModal(pubkey, fallbackName, row) {
 function refreshUserModalContext() {
   const ctx = state.userModalContext;
   if (!ctx?.entry_id) return;
-  const row = buildRows().find((r) => r.entry_id === ctx.entry_id);
+  const row = buildBaseRows({ includeHiddenRevoked: true }).find((r) => r.entry_id === ctx.entry_id);
   if (!row) return;
   ctx.entry_title = cleanText(row.title || "", 120);
   ctx.entry_artist = cleanText(row.artist || "", 120);
@@ -3547,13 +4791,58 @@ function renderUserModalModeration() {
   }
 }
 
-function openModal(node) {
-  if (!node) return;
-  node.classList.remove("hidden");
+function visibleModalNodes() {
+  return [...document.querySelectorAll(".modal:not(.hidden)")];
 }
 
-function closeModal(node) {
+function canRestoreFocus(node) {
+  return Boolean(node && node.isConnected && !node.closest(".hidden") && node.getClientRects().length > 0);
+}
+
+function syncModalEnvironment() {
+  document.body.classList.toggle("modal-open", visibleModalNodes().length > 0);
+}
+
+function modalFocusTarget(node) {
+  if (!node) return null;
+  return node.querySelector(
+    "input:not([disabled]), textarea:not([disabled]), select:not([disabled])",
+  ) || node.querySelector(".modal-card") || node.querySelector(".modal-close") || node.querySelector(
+    "button:not([disabled]):not(.hidden):not([data-close-modal]), a[href], [tabindex]:not([tabindex='-1'])",
+  ) || node;
+}
+
+function openModal(node) {
   if (!node) return;
+  const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  if (canRestoreFocus(active) && !active.closest(".modal")) {
+    state.modal.lastFocused = active;
+  }
+  node.classList.remove("hidden");
+  const card = node.querySelector(".modal-card");
+  if (card instanceof HTMLElement && !card.hasAttribute("tabindex")) {
+    card.setAttribute("tabindex", "-1");
+  }
+  if (card instanceof HTMLElement) {
+    card.scrollTop = 0;
+  }
+  if (node instanceof HTMLElement) {
+    node.scrollTop = 0;
+  }
+  syncModalEnvironment();
+  const focusTarget = modalFocusTarget(node);
+  window.requestAnimationFrame(() => {
+    if (!(focusTarget instanceof HTMLElement)) return;
+    try {
+      focusTarget.focus({ preventScroll: true });
+    } catch {
+      focusTarget.focus();
+    }
+  });
+}
+
+function closeModal(node, { restoreFocus = true } = {}) {
+  if (!node || node.classList.contains("hidden")) return;
   node.classList.add("hidden");
   if (node === el.userModal) {
     state.userModalContext = null;
@@ -3564,4 +4853,28 @@ function closeModal(node) {
   if (node === el.deleteConfirmModal) {
     state.deleteConfirmContext = null;
   }
+  syncModalEnvironment();
+  if (!restoreFocus) return;
+  const visible = visibleModalNodes();
+  if (visible.length > 0) {
+    const focusTarget = modalFocusTarget(visible[visible.length - 1]);
+    window.requestAnimationFrame(() => {
+      if (!(focusTarget instanceof HTMLElement)) return;
+      try {
+        focusTarget.focus({ preventScroll: true });
+      } catch {
+        focusTarget.focus();
+      }
+    });
+    return;
+  }
+  const restore = state.modal.lastFocused;
+  if (!canRestoreFocus(restore)) return;
+  window.requestAnimationFrame(() => {
+    try {
+      restore.focus({ preventScroll: true });
+    } catch {
+      restore.focus();
+    }
+  });
 }

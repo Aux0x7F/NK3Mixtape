@@ -1,9 +1,14 @@
-const CACHE_NAME = "nk3-shell-v17";
+const CACHE_NAME = "nk3-shell-v18";
 const APP_SHELL = [
   "./",
   "./index.html",
   "./manifest.webmanifest",
-  "./styles.css",
+  "./styles/styles.css",
+  "./styles/fonts/bowlby-one-sc-latin-400.woff2",
+  "./styles/fonts/epilogue-latin-var.woff2",
+  "./styles/fonts/ibm-plex-mono-latin-400.woff2",
+  "./styles/fonts/ibm-plex-mono-latin-600.woff2",
+  "./styles/fonts/teko-latin-var.woff2",
   "./app.js",
   "./shared-cache-worker.js",
   "./vendor/event-tools.bundle.js",

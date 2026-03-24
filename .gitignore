@@ -1,3 +1,5 @@
 peer-pinner/node_modules/
 peer-pinner/data/
 *.log
+download/
+.nk3-tools/
