@@ -3,3 +3,7 @@ peer-pinner/data/
 *.log
 download/
 .nk3-tools/
+.tmp-playwright/
+test-results/
+playwright-report/
+.tmp-*
